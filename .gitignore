@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+my_env/
+venv/
+env/
+ENV/
+.env
+
+# TensorBoard logs
+tb_logs/
+SentimentClassification/tb_logs/
+
+# IDEs
+.idea/
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
