@@ -16,6 +16,7 @@ import pandas as pd
 from transformers import AutoTokenizer
 
 
+
 def get_args():
     parser = argparse.ArgumentParser(description='Embedd articles using RedditTransformer via Spark')
 

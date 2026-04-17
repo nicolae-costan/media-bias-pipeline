@@ -27,7 +27,7 @@ def main(hparams) -> None:
             if file.endswith(".ckpt"):
                 ckpt_full_path = os.path.join(hparams.checkpoint_path, file)
                 print(f"--- Loading model from: {ckpt_full_path} ---")
-                model = BERTClassifier.load_from_checkpoint(ckpt_full_path)
+                model = BERTClassifier.load_from_checkpoint(ckpt_full_path, hparams=hparams)
                 break
 
     if model is None:
@@ -42,10 +42,9 @@ def main(hparams) -> None:
     # We don't need a logger for testing, so we set it to False
     trainer = Trainer(
         logger=False,
-        gpus=hparams.gpus,
-        distributed_backend="dp",  # Match the training setup
+        accelerator="cpu",  # Force CPU usage
+        devices=1,  # Use 1 CPU core/process
     )
-
     # ------------------------
     # 3. START TESTING
     # ------------------------
