@@ -12,6 +12,12 @@ from pytorch_lightning import Trainer, seed_everything # Use built-in seed
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from test_tube import HyperOptArgumentParser
+from sklearn.preprocessing import LabelEncoder
+
+# Modern PyTorch (2.6+) FIX: Allow LabelEncoder to be unpickled from hparams
+# during checkpoint loading (otherwise .test() crashes with UnpicklingError)
+if hasattr(torch.serialization, 'add_safe_globals'):
+    torch.serialization.add_safe_globals([LabelEncoder])
 
 def main(hparams) -> None:
     """

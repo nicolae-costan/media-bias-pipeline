@@ -167,18 +167,20 @@ class BERTRegressor(pl.LightningModule):
     def loss(self, predictions: dict, targets: dict) -> torch.Tensor:
 
         loss = self._loss(predictions['logits'].flatten(), targets['labels'])
-        # FIX: was (aux_task != 'None') & (aux_task == 'emotions') — logically impossible,
-        # 'emotions' is never equal to 'None' so the & made the branch unreachable
+        # Consistent multi-task check (handles both None object and 'None' string)
+        aux_active = str(self.hparams.aux_task) != "None"
+
         if self.hparams.aux_task == 'emotions':
             loss_aux = self._loss_aux(predictions["logits_aux"], targets["labels_aux"])
             return loss, loss_aux
-        elif self.hparams.aux_task != 'None':
+        elif aux_active:
             loss_aux = self._loss_aux(predictions["logits_aux"], targets["labels_aux"].type(torch.long))
             return loss, loss_aux
         return loss, None
 
     def backward(self, loss, *args, **kwargs):
-        if self.hparams.aux_task != 'None' and self.hparams.gradnorm == True:
+        aux_active = str(self.hparams.aux_task) != "None"
+        if aux_active and self.hparams.gradnorm == True:
             # Compute how much the main task loss and the auxiliary loss weigh in the final loss
             loss_val = self.weights * loss
             total_weighted_loss = loss_val.sum()
@@ -222,7 +224,7 @@ class BERTRegressor(pl.LightningModule):
             grad_norm_loss = (norms - constant_term).abs().sum()
             # update the weights as the loss is wnew = w old - w * norms * sign * lr
             self.weights.grad = torch.autograd.grad(grad_norm_loss, self.weights)[0]
-        elif self.hparams.aux_task != 'None':
+        elif aux_active:
             # Grad norm is not open so just try to minimise the error in the fastest way possible
             loss_val = self.weights * loss
             total_weighted_loss = loss_val.sum()
@@ -235,7 +237,7 @@ class BERTRegressor(pl.LightningModule):
         optimizer.step(closure=optimizer_closure)
 
         # Phase 2: The Multi-Task Safety Net
-        if getattr(self.hparams, 'aux_task', 'None') != 'None':
+        if str(getattr(self.hparams, 'aux_task', 'None')) != 'None':
             with torch.no_grad():
                 # Keep the normalization so weights always add up to 2
                 normalize_coeff = len(self.weights) / self.weights.sum()
@@ -250,8 +252,9 @@ class BERTRegressor(pl.LightningModule):
             # (val uses _dev_dataset, test uses _test_dataset)
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Shared aux metric logic for val/test steps. Stays on-device where possible."""
+        aux_task_str = str(self.hparams.aux_task)
 
-        if self.hparams.aux_task not in ("None", "emotions"):
+        if aux_task_str not in ("None", "emotions"):
             label_hat_aux = torch.argmax(y_aux_hat, dim=1)
             acc = (y_aux == label_hat_aux).float().mean()
 
@@ -295,7 +298,7 @@ class BERTRegressor(pl.LightningModule):
         y = targets["labels"]
         y_hat = model_out["logits"]
 
-        if self.hparams.aux_task != "None":
+        if str(self.hparams.aux_task) != "None":
             val_acc_aux, conf_matrix_aux = self._compute_aux_metrics(
                 targets["labels_aux"],
                 model_out["logits_aux"],
@@ -322,7 +325,7 @@ class BERTRegressor(pl.LightningModule):
         model_out = self.forward(inputs)
         loss_val = self.loss(model_out, targets)
 
-        if self.hparams.aux_task != "None":
+        if str(self.hparams.aux_task) != "None":
             task_losses = torch.stack(loss_val)
             total_weighted_loss = (self.weights * task_losses).sum()
             log_dict = {
@@ -352,7 +355,7 @@ class BERTRegressor(pl.LightningModule):
         y = targets["labels"]
         y_hat = model_out["logits"]
 
-        if self.hparams.aux_task != "None":
+        if str(self.hparams.aux_task) != "None":
             val_acc_aux, conf_matrix_aux = self._compute_aux_metrics(
                 targets["labels_aux"],
                 model_out["logits_aux"],
@@ -428,7 +431,7 @@ class BERTRegressor(pl.LightningModule):
         self.log("val_acc_aux", val_acc_aux_mean, prog_bar=True, sync_dist=True)
 
         # --- Confusion matrix figures (only on rank 0 to avoid duplicates) ---
-        if self.trainer.is_global_zero and self.hparams.aux_task != "None":
+        if self.trainer.is_global_zero and str(self.hparams.aux_task) != "None":
             labels = (
                 self._dev_dataset.columns
                 if self.hparams.aux_task == "emotions"
@@ -495,7 +498,7 @@ class BERTRegressor(pl.LightningModule):
 
         # is_global_zero ensures only one process logs/plots in multi-GPU runs
         # Without this, every GPU would write the same figure to the logger
-        if self.trainer.is_global_zero and self.hparams.aux_task != "None":
+        if self.trainer.is_global_zero and str(self.hparams.aux_task) != "None":
             labels = (
                 self._test_dataset.columns
                 if self.hparams.aux_task == "emotions"
@@ -518,8 +521,9 @@ class BERTRegressor(pl.LightningModule):
 
     def configure_optimizers(self):
         """Sets different learning rates for different parameter groups."""
+        aux_task_str = str(self.hparams.aux_task)
 
-        if self.hparams.aux_task != "None" and self.hparams.gradnorm:
+        if aux_task_str != "None" and self.hparams.gradnorm:
             param_groups = [
                 # FIX: Changed learning_rate to encoder_learning_rate
                 {"params": self.model.parameters(), "lr": self.hparams.encoder_learning_rate},

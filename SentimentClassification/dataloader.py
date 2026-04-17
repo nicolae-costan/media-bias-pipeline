@@ -21,15 +21,17 @@ class RedditDataset(Dataset):
                 on a sample.
         """
         self.comments = pd.read_csv(data_csv)
-        if aux_task == 'None' or aux_task is None:
-            aux_task = 'group'
-        if aux_task == 'emotions':
+        aux_task_str = str(aux_task)
+        if aux_task_str == 'None':
+            self.comments['label_aux'] = 0
+        elif aux_task_str == 'emotions':
             # concatanate into a single vector
             self.comments['label_aux'] = self.comments[['Anger','Contempt','Disgust','Fear','Gratitude','Guilt','Happiness','Hope','Pride','Relief','Sadness','Sympathy','Emotions_Neutral']].values.tolist()
             self.columns = list(self.comments[['Anger','Contempt','Disgust','Fear','Gratitude','Guilt','Happiness','Hope','Pride','Relief','Sadness','Sympathy','Emotions_Neutral']].columns)
         else:
-            le_aux.fit(self.comments[aux_task].values)
-            self.comments['label_aux'] = le_aux.transform(self.comments[aux_task].values)
+            # ONLY transform, don't re-fit! Fitting should happen in the model's __init__
+            # on the full dataset to ensure consistent label indexing across splits.
+            self.comments['label_aux'] = le_aux.transform(self.comments[aux_task_str].values)
 
     def __len__(self):
         return len(self.comments)

@@ -121,8 +121,9 @@ class RoBERTaRegressor(pl.LightningModule):
         inputs, targets = batch
         
         # SMART ROUTING: Pass labels to the correct head
-        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
-        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+        aux_task_str = str(self.hparams.aux_task)
+        labels_emotion = targets.get("labels_aux") if aux_task_str == 'emotions' else None
+        labels_social = targets.get("labels_aux") if aux_task_str not in ('emotions', 'None', 'bias') else None
 
         outputs = self.forward(
             inputs, 
@@ -139,13 +140,14 @@ class RoBERTaRegressor(pl.LightningModule):
 
     def _compute_aux_metrics(self, y_aux: torch.Tensor, outputs: dict) -> torch.Tensor:
         """Calculates accuracy for the active auxiliary task."""
-        if self.hparams.aux_task == 'emotions':
+        aux_task_str = str(self.hparams.aux_task)
+        if aux_task_str == 'emotions':
             # Multi-label Jaccard score
             y_aux_np = y_aux.cpu().numpy()
             y_aux_hat_np = (torch.sigmoid(outputs["emotions"]) > 0.5).cpu().numpy()
             acc = jaccard_score(y_aux_np, y_aux_hat_np, average="macro")
             return torch.tensor(acc)
-        elif self.hparams.aux_task not in ('None', 'bias'):
+        elif aux_task_str not in ('None', 'bias'):
             # Single-label classification accuracy
             y_aux_hat = torch.argmax(outputs["social_group"], dim=1)
             acc = (y_aux.long() == y_aux_hat).float().mean()
@@ -157,8 +159,9 @@ class RoBERTaRegressor(pl.LightningModule):
         inputs, targets = batch
         
         # SMART ROUTING
-        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
-        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+        aux_task_str = str(self.hparams.aux_task)
+        labels_emotion = targets.get("labels_aux") if aux_task_str == 'emotions' else None
+        labels_social = targets.get("labels_aux") if aux_task_str not in ('emotions', 'None', 'bias') else None
 
         outputs = self.forward(
             inputs, 
@@ -201,8 +204,9 @@ class RoBERTaRegressor(pl.LightningModule):
         inputs, targets = batch
         
         # SMART ROUTING
-        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
-        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+        aux_task_str = str(self.hparams.aux_task)
+        labels_emotion = targets.get("labels_aux") if aux_task_str == 'emotions' else None
+        labels_social = targets.get("labels_aux") if aux_task_str not in ('emotions', 'None', 'bias') else None
 
         outputs = self.forward(
             inputs,
