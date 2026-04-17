@@ -6,6 +6,7 @@ from pathlib import Path
 
 # Ensure this matches your filename: BertRegression.py
 from BertRegression import BERTRegressor as BERTClassifier
+from RoBERTaRegression import RoBERTaRegressor as RoBERTaClassifier
 from pytorch_lightning import Trainer, seed_everything # Use built-in seed
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -18,17 +19,21 @@ def main(hparams) -> None:
     # FIX: Replaced torchnlp set_seed with Lightning seed_everything
     seed_everything(hparams.seed)
 
-    # ------------------------
     # 1. INIT LIGHTNING MODEL
     # ------------------------
-    model = BERTClassifier(hparams)
+    if hparams.model_type == "roberta":
+        print(f"--- Using RoBERTa Backbone ({hparams.encoder_model}) ---")
+        model = RoBERTaClassifier(hparams)
+    else:
+        print(f"--- Using BERT Backbone ({hparams.encoder_model}) ---")
+        model = BERTClassifier(hparams)
 
     # ------------------------
     # 2. INIT LOGGER (Local TensorBoard)
     # ------------------------
     tb_logger = TensorBoardLogger(
         save_dir="tb_logs",
-        name=f"task_{hparams.aux_task}"
+        name=f"task_{hparams.aux_task}_{hparams.model_type}"
     )
 
     # ------------------------
@@ -67,8 +72,8 @@ def main(hparams) -> None:
         callbacks=[checkpoint_callback, early_stop_callback],
 
         # THE FIX: 'gpus' is now split into accelerator and devices
-        accelerator="auto",  # Tells Lightning to use the GPU
-        devices=hparams.gpus,  # Tells it how many to use (e.g., 1)
+        accelerator="gpu" if hparams.gpus > 0 else "cpu",
+        devices=hparams.gpus if hparams.gpus > 0 else 1,
 
         # THE FIX: 'dp' (DataParallel) is mostly deprecated;
         # 'ddp' (DistributedDataParallel) is the modern standard.
@@ -105,6 +110,16 @@ if __name__ == "__main__":
     parser.add_argument("--monitor", default="val_loss", type=str)
     parser.add_argument("--metric_mode", default="min", type=str)
 
+    # Model Selection
+    parser.opt_list(
+        "--model_type",
+        default="bert",
+        tunable=False,
+        type=str,
+        options=["bert", "roberta"],
+        help="The architecture to use for training",
+    )
+
     # Hardware & Batching
     parser.add_argument("--batch_size", default=6, type=int)
     parser.add_argument("--gpus", type=int, default=1)
@@ -114,9 +129,15 @@ if __name__ == "__main__":
     # Search mode
     parser.add_argument("--search_mode", default=False, type=bool)
 
-    # Add BERT-specific arguments from the model class
+    # Add model-specific arguments
+    # If using RoBERTa, it will still use similar arguments for now
     parser = BERTClassifier.add_model_specific_args(parser)
     hparams = parser.parse_args()
+
+    # Set default encoder model based on type if not explicitly provided
+    # (Note: HyperOptArgumentParser handle defaults, but we ensure consistency here)
+    if hparams.model_type == "roberta" and hparams.encoder_model == "bert-base-uncased":
+        hparams.encoder_model = "roberta-base"
 
     if not hparams.search_mode:
         main(hparams)

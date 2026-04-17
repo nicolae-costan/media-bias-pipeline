@@ -21,7 +21,7 @@ class RedditDataset(Dataset):
                 on a sample.
         """
         self.comments = pd.read_csv(data_csv)
-        if aux_task == 'None':
+        if aux_task == 'None' or aux_task is None:
             aux_task = 'group'
         if aux_task == 'emotions':
             # concatanate into a single vector
