@@ -13,6 +13,7 @@ import seaborn as sn
 from torch import optim
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import get_linear_schedule_with_warmup
+from sklearn.preprocessing import LabelEncoder
 
 from dataloader import sentiment_analysis_dataset, MyCollator
 from RoBERTaMTL import RoBERTaMTL
@@ -37,6 +38,10 @@ class RoBERTaRegressor(pl.LightningModule):
             if isinstance(v, (int, float, str, bool, type(None)))
         }
         self.save_hyperparameters(clean_hparams)
+        
+        # Initialize LabelEncoders needed by dataloader
+        self.hparams.le = LabelEncoder()
+        self.hparams.le_aux = LabelEncoder()
         
         # Track outputs for epoch-end aggregation
         self.training_step_outputs = []
