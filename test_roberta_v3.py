@@ -16,7 +16,7 @@ from sklearn.preprocessing import LabelEncoder
 # ---------------------------------------------------------
 
 # Add the SentimentClassification directory to sys.path
-BASE_DIR = Path("/home/nicu/facultate/big_data/media-bias-pipeline")
+BASE_DIR = Path("/media-bias-pipeline")
 sys.path.append(str(BASE_DIR / "SentimentClassification"))
 
 from RoBERTaRegression import RoBERTaRegressor
@@ -32,8 +32,8 @@ def main():
     # Change working directory to BASE_DIR so relative paths in hparams work
     os.chdir(str(BASE_DIR))
     
-    ckpt_path = "/home/nicu/facultate/big_data/media-bias-pipeline/tb_logs/task_None_roberta/version_3/checkpoints/epoch=5-val_loss=0.12.ckpt"
-    hparams_path = "/home/nicu/facultate/big_data/media-bias-pipeline/tb_logs/task_None_roberta/version_3/hparams.yaml"
+    ckpt_path = "/media-bias-pipeline/tb_logs/task_None_roberta/version_3/checkpoints/epoch=5-val_loss=0.12.ckpt"
+    hparams_path = "/media-bias-pipeline/tb_logs/task_None_roberta/version_3/hparams.yaml"
     
     print(f"--- Loading RoBERTa Checkpoint: {ckpt_path} ---")
     
