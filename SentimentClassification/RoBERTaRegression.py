@@ -54,49 +54,46 @@ class RoBERTaRegressor(pl.LightningModule):
             model_name=self.hparams.encoder_model,
             num_emotions=13,  # Standard for this project
             num_social_groups=10,
-            extra_dropout=getattr(self.hparams, 'extra_dropout', 0.1)
+            extra_dropout=getattr(self.hparams, 'extra_dropout', 0.1),
+            loss_weights={
+                "bias": 1.0, 
+                "emotion": 1.0, 
+                "social": 0.5 if getattr(self.hparams, 'ablate_social_group', False) else 1.0
+            }
         )
         
-        # Multi-task balance weights (if using GradNorm or simple weighting)
-        self.weights = nn.Parameter(torch.ones(3), requires_grad=True)
+        # Set initial ablation state
+        if getattr(self.hparams, 'ablate_social_group', False):
+            self.model.set_ablation_mode(True)
         
-        # Loss functions
-        self.mse_loss = nn.MSELoss()
-        self.bce_loss = nn.BCEWithLogitsLoss()
-        self.ce_loss = nn.CrossEntropyLoss()
-        
-    def forward(self, batch: dict) -> dict:
-        return self.model(batch=batch)
-    
-    def loss(self, predictions: dict, targets: dict) -> dict:
-        """Calculate losses for all tasks."""
-        # Task 1: Bias (Regression)
-        bias_loss = self.mse_loss(
-            predictions["bias_score"].flatten(), 
-            targets["labels"]
+    def forward(
+        self, 
+        batch_inputs: dict, 
+        labels_bias: torch.Tensor = None, 
+        labels_emotion: torch.Tensor = None, 
+        labels_social: torch.Tensor = None
+    ) -> dict:
+        """Process inputs and labels via internal RoBERTaMTL logic."""
+        return self.model(
+            input_ids=batch_inputs["input_ids"],
+            attention_mask=batch_inputs["attention_mask"],
+            labels_bias=labels_bias,
+            labels_emotion=labels_emotion,
+            labels_social=labels_social
         )
-        
-        # Task 2: Emotions (Multi-label classification)
-        emotion_loss = self.bce_loss(
-            predictions["emotions"], 
-            targets["labels_aux"]
-        )
-        
-        # Note: Social group prediction is available but typically 
-        # treated as secondary in the current pipeline.
-        
-        return {
-            "bias": bias_loss,
-            "emotion": emotion_loss
-        }
 
     def training_step(self, batch: tuple, batch_nb: int) -> torch.Tensor:
         inputs, targets = batch
-        predictions = self.forward(inputs)
-        losses = self.loss(predictions, targets)
         
-        # Simple weighted sum (can be extended to GradNorm)
-        total_loss = losses["bias"] + losses["emotion"]
+        # Pass labels directly to the model for internal loss calculation
+        outputs = self.forward(
+            inputs, 
+            labels_bias=targets.get("labels"),
+            labels_emotion=targets.get("labels_aux"),
+            labels_social=targets.get("labels_social") if "labels_social" in targets else None
+        )
+        
+        total_loss = outputs["loss"]
         
         self.log("train_loss", total_loss, prog_bar=True, sync_dist=True)
         self.training_step_outputs.append({"loss": total_loss})
@@ -104,19 +101,23 @@ class RoBERTaRegressor(pl.LightningModule):
 
     def validation_step(self, batch: tuple, batch_nb: int) -> dict:
         inputs, targets = batch
-        predictions = self.forward(inputs)
-        losses = self.loss(predictions, targets)
+        
+        outputs = self.forward(
+            inputs, 
+            labels_bias=targets.get("labels"),
+            labels_emotion=targets.get("labels_aux"),
+        )
         
         # Calculate accuracy for emotions (aux task)
         # Using Jaccard score for multi-label
         y_aux = targets["labels_aux"].cpu().numpy()
-        y_aux_hat = (torch.sigmoid(predictions["emotions"]) > 0.5).cpu().numpy()
+        y_aux_hat = (torch.sigmoid(outputs["emotions"]) > 0.5).cpu().numpy()
         val_acc_aux = jaccard_score(y_aux, y_aux_hat, average="macro")
         
         output = {
-            "val_loss": losses["bias"] + losses["emotion"],
+            "val_loss": outputs["loss"],
             "labels": targets["labels"],
-            "predictions": predictions["bias_score"],
+            "predictions": outputs["bias_score"],
             "val_acc_aux": torch.tensor(val_acc_aux)
         }
         self.validation_step_outputs.append(output)
