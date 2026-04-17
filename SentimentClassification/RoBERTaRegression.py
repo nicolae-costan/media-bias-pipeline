@@ -39,10 +39,6 @@ class RoBERTaRegressor(pl.LightningModule):
         }
         self.save_hyperparameters(clean_hparams)
         
-        # Initialize LabelEncoders needed by dataloader
-        self.hparams.le = LabelEncoder()
-        self.hparams.le_aux = LabelEncoder()
-        
         # Track outputs for epoch-end aggregation
         self.training_step_outputs = []
         self.validation_step_outputs = []
@@ -54,11 +50,49 @@ class RoBERTaRegressor(pl.LightningModule):
             self.hparams.max_length
         )
         
-        # Initialize model
+        # FIX: DYNAMIC MODEL BUILDING
+        # 1. Fit label encoders to data
+        # 2. Initialize RoBERTaMTL with correct head sizes
+        self.__build_model()
+        
+        # Set initial ablation state
+        if getattr(self.hparams, 'ablate_social_group', False):
+            self.model.set_ablation_mode(True)
+        
+    def __build_model(self):
+        """
+        Dynamically adjusts head sizes based on the dataset before initializing RoBERTaMTL.
+        """
+        try:
+            train_df = pd.read_csv(self.hparams.train_csv)
+            test_df = pd.read_csv(self.hparams.test_csv)
+            dev_df = pd.read_csv(self.hparams.dev_csv)
+            comments = pd.concat([train_df, test_df, dev_df])
+        except Exception as e:
+            print(f"Could not load CSV for sizing check: {e}")
+            # Fallback to defaults
+            comments = None
+
+        self.hparams.le = LabelEncoder()
+        self.hparams.le_aux = LabelEncoder()
+
+        aux_task_str = str(self.hparams.aux_task)
+        num_emotions = 13 # Standard
+        num_social = 10 # Default fallback
+
+        if aux_task_str == 'emotions':
+            # Emotions are multi-label (one-hot), no le_aux needed
+            pass 
+        elif aux_task_str not in ('None', 'bias'): # e.g. 'group'
+            if comments is not None:
+                self.hparams.le_aux.fit(comments[self.hparams.aux_task].values)
+                num_social = len(self.hparams.le_aux.classes_)
+                print(f"--- Detected {num_social} classes for task: {aux_task_str} ---")
+        
         self.model = RoBERTaMTL(
             model_name=self.hparams.encoder_model,
-            num_emotions=13,  # Standard for this project
-            num_social_groups=10,
+            num_emotions=num_emotions,
+            num_social_groups=num_social,
             extra_dropout=getattr(self.hparams, 'extra_dropout', 0.1),
             loss_weights={
                 "bias": 1.0, 
@@ -66,11 +100,7 @@ class RoBERTaRegressor(pl.LightningModule):
                 "social": 0.5 if getattr(self.hparams, 'ablate_social_group', False) else 1.0
             }
         )
-        
-        # Set initial ablation state
-        if getattr(self.hparams, 'ablate_social_group', False):
-            self.model.set_ablation_mode(True)
-        
+
     def forward(
         self, 
         batch_inputs: dict, 
@@ -90,12 +120,15 @@ class RoBERTaRegressor(pl.LightningModule):
     def training_step(self, batch: tuple, batch_nb: int) -> torch.Tensor:
         inputs, targets = batch
         
-        # Pass labels directly to the model for internal loss calculation
+        # SMART ROUTING: Pass labels to the correct head
+        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
+        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+
         outputs = self.forward(
             inputs, 
             labels_bias=targets.get("labels"),
-            labels_emotion=targets.get("labels_aux"),
-            labels_social=targets.get("labels_social") if "labels_social" in targets else None
+            labels_emotion=labels_emotion,
+            labels_social=labels_social
         )
         
         total_loss = outputs["loss"]
@@ -104,26 +137,43 @@ class RoBERTaRegressor(pl.LightningModule):
         self.training_step_outputs.append({"loss": total_loss})
         return total_loss
 
+    def _compute_aux_metrics(self, y_aux: torch.Tensor, outputs: dict) -> torch.Tensor:
+        """Calculates accuracy for the active auxiliary task."""
+        if self.hparams.aux_task == 'emotions':
+            # Multi-label Jaccard score
+            y_aux_np = y_aux.cpu().numpy()
+            y_aux_hat_np = (torch.sigmoid(outputs["emotions"]) > 0.5).cpu().numpy()
+            acc = jaccard_score(y_aux_np, y_aux_hat_np, average="macro")
+            return torch.tensor(acc)
+        elif self.hparams.aux_task not in ('None', 'bias'):
+            # Single-label classification accuracy
+            y_aux_hat = torch.argmax(outputs["social_group"], dim=1)
+            acc = (y_aux.long() == y_aux_hat).float().mean()
+            return acc
+        else:
+            return torch.tensor(0.0)
+
     def validation_step(self, batch: tuple, batch_nb: int) -> dict:
         inputs, targets = batch
         
+        # SMART ROUTING
+        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
+        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+
         outputs = self.forward(
             inputs, 
             labels_bias=targets.get("labels"),
-            labels_emotion=targets.get("labels_aux"),
+            labels_emotion=labels_emotion,
+            labels_social=labels_social,
         )
         
-        # Calculate accuracy for emotions (aux task)
-        # Using Jaccard score for multi-label
-        y_aux = targets["labels_aux"].cpu().numpy()
-        y_aux_hat = (torch.sigmoid(outputs["emotions"]) > 0.5).cpu().numpy()
-        val_acc_aux = jaccard_score(y_aux, y_aux_hat, average="macro")
+        val_acc_aux = self._compute_aux_metrics(targets.get("labels_aux"), outputs)
         
         output = {
             "val_loss": outputs["loss"],
             "labels": targets["labels"],
             "predictions": outputs["bias_score"],
-            "val_acc_aux": torch.tensor(val_acc_aux)
+            "val_acc_aux": val_acc_aux
         }
         self.validation_step_outputs.append(output)
         return output
@@ -149,13 +199,25 @@ class RoBERTaRegressor(pl.LightningModule):
     def test_step(self, batch: tuple, batch_nb: int) -> dict:
         # Similar logic to validation
         inputs, targets = batch
-        predictions = self.forward(inputs)
-        losses = self.loss(predictions, targets)
         
+        # SMART ROUTING
+        labels_emotion = targets.get("labels_aux") if self.hparams.aux_task == 'emotions' else None
+        labels_social = targets.get("labels_aux") if self.hparams.aux_task not in ('emotions', 'None', 'bias') else None
+
+        outputs = self.forward(
+            inputs,
+            labels_bias=targets.get("labels"),
+            labels_emotion=labels_emotion,
+            labels_social=labels_social
+        )
+        
+        test_acc_aux = self._compute_aux_metrics(targets.get("labels_aux"), outputs)
+
         output = {
-            "test_loss": losses["bias"] + losses["emotion"],
+            "test_loss": outputs["loss"],
             "labels": targets["labels"],
-            "predictions": predictions["bias_score"]
+            "predictions": outputs["bias_score"],
+            "test_acc_aux": test_acc_aux
         }
         self.test_step_outputs.append(output)
         return output

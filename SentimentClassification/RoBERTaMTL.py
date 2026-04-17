@@ -166,7 +166,7 @@ class RoBERTaMTL(nn.Module):
             results["loss_emotion"] = loss_emotion
             
         if labels_social is not None and not self.ablate_social_group:
-            loss_social = nn.CrossEntropyLoss()(social_logits, labels_social)
+            loss_social = nn.CrossEntropyLoss()(social_logits, labels_social.long())
             loss += self.loss_weights["social"] * loss_social
             results["loss_social"] = loss_social
         elif self.ablate_social_group:
