@@ -4,12 +4,14 @@ import re
 import numpy as np
 import torch
 import psycopg2
+from matplotlib import collections
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, pandas_udf
 from pyspark.sql.types import (
     StructType, StructField, StringType,
     ArrayType, FloatType
 )
+from collections import defaultdict
 import pandas as pd
 from transformers import AutoTokenizer
 
@@ -123,17 +125,48 @@ def embed_partition(
 
         mapping = tokenized.pop("overflow_to_sample_mapping")
 
+
+
         with torch.no_grad():
-            logits_main, logits_aux,hidden_states = model(tokenized.data)
+            # Run all chunks through the model simultaneously
+            logits_main, logits_aux, hidden_states = model(tokenized)
+
+            # Extract CLS embeddings for all chunks [Num_Chunks, 768]
+            # we use the us vs them main task layer 12 embeddings CLS token because it can detect bias and hostility better than just sentiments and by doing this we have a more robust model
+
             if isinstance(hidden_states, tuple):
-                # we use the us vs them main task embeddings because it can detect bias and hostility better than just sentiments
-                cls_emb = hidden_states[0][:, 0, :].cpu().numpy()  # [B, 768]
+                cls_chunks = hidden_states[0][:, 0, :].cpu().numpy()
             else:
-                cls_emb = hidden_states[:, 0, :].cpu().numpy()  # [B, 768]
+                cls_chunks = hidden_states[:, 0, :].cpu().numpy()
 
-                # --- Emotion vector from aux head (sigmoid for multi-label) ---
+            # Extract Emotion vectors for all chunks [Num_Chunks, 13]
             if logits_aux is not None:
-                emotion_vec = torch.sigmoid(logits_aux).cpu().numpy()  # [B, 13]
+                emotion_chunks = torch.sigmoid(logits_aux).cpu().numpy()
             else:
-                emotion_vec = np.zeros((len(ids), num_groups), dtype=np.float32)
+                emotion_chunks = np.zeros((len(mapping), num_groups), dtype=np.float32)
 
+        grouped_cls = defaultdict(list)
+        grouped_emo = defaultdict(list)
+
+        for chunk_idx, original_article_idx in enumerate(mapping):
+            grouped_cls[original_article_idx].append(cls_chunks[chunk_idx])
+            grouped_emo[original_article_idx].append(emotion_chunks[chunk_idx])
+
+
+        db_rows = []
+        for i,article_id in enumerate(ids):
+
+            if i not in grouped_cls:
+                final_cls = np.zeros(768, dtype=np.float32)
+                final_emo = np.zeros(num_groups, dtype=np.float32)
+            else:
+                # Average (Mean) the CLS embeddings
+                final_cls = np.mean(grouped_cls[i], axis=0)
+
+                # Max the Emotion scores (Find the most extreme spike of emotion)
+                final_emo = np.max(grouped_emo[i], axis=0)
+            db_rows.append((
+                article_id,
+                final_cls.tolist(),
+                final_emo.tolist()
+            ))
