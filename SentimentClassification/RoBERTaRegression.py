@@ -229,14 +229,27 @@ class RoBERTaRegressor(pl.LightningModule):
     def on_test_epoch_end(self) -> None:
         outputs = self.test_step_outputs
         
-        all_labels = torch.cat([o["labels"] for o in outputs]).cpu().numpy().flatten()
-        all_preds = torch.cat([o["predictions"] for o in outputs]).cpu().numpy().flatten()
+        # 1. Aggregated Metrics
+        avg_loss = torch.stack([o["test_loss"] for o in outputs]).mean()
+        avg_acc_aux = torch.stack([o["test_acc_aux"] for o in outputs]).mean()
         
-        # Save predictions
+        all_labels = torch.cat([o["labels"] for o in outputs]).flatten()
+        all_preds = torch.cat([o["predictions"] for o in outputs]).flatten()
+        
+        # Pearson Correlation for Bias
+        pearsonr = self._pearson(all_labels, all_preds)
+        
+        # Log to show in the final Trainer table
+        self.log("test_loss", avg_loss, prog_bar=True)
+        self.log("test_pearson", pearsonr, prog_bar=True)
+        self.log("test_acc_aux", avg_acc_aux, prog_bar=True)
+        
+        # 2. Save predictions to CSV
         pred_path = Path(self.hparams.checkpoint_path) / "predictions.csv"
         with pred_path.open("w", newline="") as f:
-            csv.writer(f).writerows(zip(all_preds, all_labels))
+            csv.writer(f).writerows(zip(all_preds.cpu().numpy(), all_labels.cpu().numpy()))
             
+        print(f"\n--- Test Results: Loss={avg_loss:.4f}, Pearson={pearsonr:.4f}, Aux Acc={avg_acc_aux:.4f} ---")
         self.test_step_outputs.clear()
 
     def _pearson(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
