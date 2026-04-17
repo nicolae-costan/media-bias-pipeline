@@ -1,6 +1,7 @@
 """
 Runs a model on a single node across N-gpus using TensorBoard for local logging.
 """
+import torch
 import os
 from pathlib import Path
 
@@ -16,6 +17,9 @@ def main(hparams) -> None:
     """
     Main training routine.
     """
+    # Fix for hardware precision/performance on Ampere+ GPUs
+    torch.set_float32_matmul_precision('high')
+
     # FIX: Replaced torchnlp set_seed with Lightning seed_everything
     seed_everything(hparams.seed)
 
