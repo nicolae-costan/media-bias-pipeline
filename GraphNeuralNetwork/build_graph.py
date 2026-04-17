@@ -85,6 +85,29 @@ def build_label_tensors(
     high_agreement: float,
     med_agreement: float,
 ):
+    """
+
+    :param article_ids: a list of article ids
+    :param babe_path: the path to the babe dataset file
+    :param sg1_path:  the path to the first annonators file
+    :param sg2_path: the path to the second annonators file
+    :param babe_id_col: the article id column
+    :param babe_label_col: the collumn we try to predict from babe
+    :param sg_id_col: the article id column from sg data set
+    :param sg_label_col: the collumn we try to predict from sg
+    :param high_agreement: parameter that helps us build a train dataset for the graph of only articles with high agreement
+    :param med_agreement: parameter that helps us build a validation dataset for the graph of only articles with medium agreement
+
+    Methodology:
+        The function iterates through every row from babe and based on the agreement score between annotators it adds it to either train dataset or validation  dataset
+
+    Returns:
+            y a list of labels strings in general ,
+            train_mask the mask of datasets used for training,
+            val_mask the mask of datasets used for validation,
+            weights  how confident is the prediction for each article
+
+    """
     N = len(article_ids)
     # create dict between embeddings ids and indexes
     id_to_idx = {aid:i for i,aid in enumerate(article_ids)}
@@ -128,6 +151,7 @@ def build_label_tensors(
         agr = agreement_map.get(aid,0)
 
         weights[idx] = agr
+
 
         if agr >= high_agreement:
             train_mask[idx] = True
