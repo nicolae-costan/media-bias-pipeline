@@ -263,7 +263,7 @@ def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size 
             # Exclude self-similarity
             row_sims[global_i] = -1.0
 
-            # Get top_k indices above threshold by reversing the srot
+            # Get top_k indices above threshold by reversing the list
             top_indices = np.argsort(row_sims)[::-1][:top_k]
 
             for j in top_indices:
@@ -297,3 +297,68 @@ def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size 
 
     print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
     return edge_index, edge_attr
+
+
+def main():
+    args =  get_args()
+
+    conn_params = {
+        "host": args.db_host,
+        "port": args.db_port,
+        "dbname": args.db_name,
+        "user": args.db_user,
+        "password": args.db_password,
+    }
+
+    # i think we should use only the embeddings not the emotions
+    article_ids,embeddings,emotions = load_embeddings(conn_params)
+
+    node_features = np.concatenate([embeddings,emotions],axis = 1)
+
+    x = torch.tensor(node_features, dtype=torch.float)
+    edge_index, edge_attr = build_edges(
+        embeddings,
+        top_k=args.top_k,
+        sim_threshold=args.sim_threshold,
+        chunk_size=args.chunk_size,
+    )
+
+    y, train_mask, val_mask, weights = build_label_tensors(
+        article_ids,
+        babe_path=args.babe_csv,
+        sg1_path=args.sg1_csv,
+        sg2_path=args.sg2_csv,
+        babe_id_col=args.babe_id_col,
+        babe_label_col=args.babe_label_col,
+        sg_id_col=args.sg_id_col,
+        sg_label_col=args.sg_label_col,
+        high_agreement=args.high_agreement,
+        med_agreement=args.med_agreement,
+    )
+
+    # 5. Package into PyG Data object
+    data = Data(
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        y=y,
+        train_mask=train_mask,
+        val_mask=val_mask,
+    )
+    # Store article IDs as a plain list (not a tensor) for later lookup
+    data.article_ids = article_ids
+    data.label_weights = weights
+
+    print(f"\n[build_graph] Graph summary:")
+    print(f"  Nodes          : {data.num_nodes:,}")
+    print(f"  Edges          : {data.num_edges:,}")
+    print(f"  Node feature dim: {data.num_node_features}")
+    print(f"  Labeled (train): {train_mask.sum().item():,}")
+    print(f"  Labeled (val)  : {val_mask.sum().item():,}")
+
+    torch.save(data, args.output)
+    print(f"\n[build_graph] Saved graph to: {args.output}")
+
+
+if __name__ == "__main__":
+    main()
