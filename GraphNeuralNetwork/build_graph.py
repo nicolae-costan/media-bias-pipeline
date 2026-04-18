@@ -1,17 +1,3 @@
-
-import argparse
-import numpy as np
-import pandas as pd
-import psycopg2
-import psycopg2.extras
-import torch
-from torch_geometric.data import Data
-from sklearn.preprocessing import normalize
-from sklearn.metrics.pairwise import cosine_similarity
-import scipy.sparse as sp
-from tqdm import tqdm
-
-
 import os
 import argparse
 import numpy as np
@@ -197,7 +183,7 @@ def build_label_tensors(
         y[idx] = label_map[label]
         labeled_count += 1
 
-        agr = agreement_map.get(aid,0)
+        agr = agreement_map.get(aid,0.5)
 
         weights[idx] = agr
 
@@ -336,7 +322,7 @@ def main():
         med_agreement=args.med_agreement,
     )
 
-    # 5. Package into PyG Data object
+
     data = Data(
         x=x,
         emotions=torch.tensor(emotions, dtype=torch.float),
