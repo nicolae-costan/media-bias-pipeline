@@ -166,3 +166,85 @@ def build_label_tensors(
     print(f"[build_graph] Unlabeled nodes                : {(y == -1).sum().item():,}")
 
     return y, train_mask, val_mask, weights
+
+
+def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size = 1000):
+    """
+        Builds a bidirectional k-Nearest Neighbors (k-NN) graph based on cosine similarity.
+
+        The function normalizes the input vectors (L2 norm) and computes cosine similarity
+        in chunks to optimize memory usage (RAM/VRAM). It creates edges only to the `top_k`
+        nearest neighbors, provided the similarity exceeds the `sim_threshold`. The returned
+        graph is undirected (edges are bidirectional) and deduplicated, formatted specifically
+        for PyTorch Geometric.
+
+        Args:
+            embeddings (np.ndarray): A 2D numpy array containing the vectors (shape: [num_nodes, embedding_dim]).
+            top_k (int): The maximum number of neighbors connected to a single node.
+            sim_threshold (float): The minimum cosine similarity threshold to validate an edge (e.g., 0.7).
+            chunk_size (int, optional): The batch size processed in a single iteration. This is highly
+                useful for preventing Out-Of-Memory (OOM) errors on large datasets. Defaults to 1000.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: A tuple consisting of two tensors:
+                - edge_index (torch.Tensor): Tensor of shape [2, num_edges] (dtype=torch.long).
+                  Contains the source and destination node indices.
+                - edge_attr (torch.Tensor): Tensor of shape [num_edges, 1] (dtype=torch.float).
+                  Contains the edge weights (the exact cosine similarity value).
+    """
+
+    # make it a unit vector
+    normed = normalize(embeddings,norm='l2')
+    N = len(normed)
+    rows_list = []
+    cols_list = []
+    vals_list = []
+
+    print(f"[build_graph] Building KNN graph (top_k={top_k}, threshold={sim_threshold})...")
+    for start in tqdm(range(0,N,chunk_size)):
+        end = min(N,start+chunk_size)
+        chunk = normed[start:end]
+
+        sims = cosine_similarity(chunk,normed)
+
+        # get every row
+        for local_i, row_sims in enumerate(sims):
+            global_i = start + local_i
+
+            # Exclude self-similarity
+            row_sims[global_i] = -1.0
+
+            # Get top_k indices above threshold by reversing the srot
+            top_indices = np.argsort(row_sims)[::-1][:top_k]
+
+            for j in top_indices:
+                if row_sims[j] >= sim_threshold:
+                    rows_list.append(global_i)
+                    cols_list.append(j)
+                    vals_list.append(float(row_sims[j]))
+
+    # make arrays
+    rows_arr = np.array(rows_list + cols_list, dtype=np.int64)
+    cols_arr = np.array(cols_list + rows_list, dtype=np.int64)
+    vals_arr = np.array(vals_list + vals_list, dtype=np.float32)
+
+    # Deduplicate having an array as [0,1] and the other one as [1,0]
+    edge_set = {}
+    for r, c, v in zip(rows_arr, cols_arr, vals_arr):
+        key = (min(r, c), max(r, c))
+        if key not in edge_set:
+            edge_set[key] = v
+
+    final_rows = []
+    final_cols = []
+    final_vals = []
+    for (r, c), v in edge_set.items():
+        final_rows.extend([r, c])
+        final_cols.extend([c, r])
+        final_vals.extend([v, v])
+
+    edge_index = torch.tensor([final_rows, final_cols], dtype=torch.long)
+    edge_attr = torch.tensor(final_vals, dtype=torch.float).unsqueeze(1)
+
+    print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
+    return edge_index, edge_attr
