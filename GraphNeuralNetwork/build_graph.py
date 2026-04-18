@@ -12,37 +12,86 @@ import scipy.sparse as sp
 from tqdm import tqdm
 
 
+import os
+import argparse
+import numpy as np
+import pandas as pd
+import psycopg2
+import psycopg2.extras
+import torch
+from torch_geometric.data import Data
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_similarity
+import scipy.sparse as sp
+from tqdm import tqdm
+from dotenv import load_dotenv
+
+# Load environment variables from the .env file
+load_dotenv()
+
 def get_args():
     parser = argparse.ArgumentParser(description="Build similarity graph from article embeddings")
 
-    # Database
-    parser.add_argument("--db_host",     type=str, default="localhost")
-    parser.add_argument("--db_port",     type=int, default=5432)
-    parser.add_argument("--db_name",     type=str, required=True)
-    parser.add_argument("--db_user",     type=str, required=True)
-    parser.add_argument("--db_password", type=str, required=True)
+    # Database (Defaults pulled from .env)
+    parser.add_argument("--db_host", type=str, default=os.getenv("DB_HOST", "localhost"))
+    parser.add_argument("--db_port", type=int, default=int(os.getenv("DB_PORT", 5432)))
+    parser.add_argument("--db_name", type=str, default=os.getenv("DB_NAME"))
+    parser.add_argument("--db_user", type=str, default=os.getenv("DB_USER"))
+    parser.add_argument("--db_password", type=str, default=os.getenv("DB_PASSWORD"))
 
-    parser.add_argument("--babe_csv",  type=str, required=True, help="final_labels_mbic.csv")
-    parser.add_argument("--sg1_csv",   type=str, required=True, help="sg1.csv for agreement scores")
-    parser.add_argument("--sg2_csv",   type=str, required=True, help="sg2.csv for agreement scores")
+    # File Paths
+    parser.add_argument("--babe_csv", type=str, default=os.getenv("BABE_CSV", "final_labels_mbic.csv"))
+    parser.add_argument("--sg1_csv", type=str, default=os.getenv("SG1_CSV", "sg1.csv"))
+    parser.add_argument("--sg2_csv", type=str, default=os.getenv("SG2_CSV", "sg2.csv"))
 
-    parser.add_argument("--babe_id_col", type=str, default="article_id")
-    parser.add_argument("--babe_label_col", type=str, default="label_bias",
+    # Column mappings (Kept as hardcoded defaults, but you can add these to .env too if you want)
+    # Column mappings (Now pulled from .env)
+    parser.add_argument("--babe_id_col", type=str, default=os.getenv("BABE_ID_COL", "article_id"))
+    parser.add_argument("--babe_label_col", type=str, default=os.getenv("BABE_LABEL_COL", "label_bias"),
                         help="Column with Biased/Non-biased labels")
-    parser.add_argument("--sg_id_col", type=str, default="article_id")
-    parser.add_argument("--sg_label_col", type=str, default="label_bias")
+    parser.add_argument("--sg_id_col", type=str, default=os.getenv("SG_ID_COL", "article_id"))
+    parser.add_argument("--sg_label_col", type=str, default=os.getenv("SG_LABEL_COL", "label_bias"))
 
-    parser.add_argument("--top_k", type=int, default=10, help="K nearest neighbors per node")
-    parser.add_argument("--sim_threshold", type=float, default=0.75, help="Min cosine similarity to add edge")
-    parser.add_argument("--chunk_size", type=int, default=1000, help="Chunk size for similarity computation")
+    # Hyperparameters (Defaults pulled from .env)
+    parser.add_argument("--top_k", type=int, default=int(os.getenv("TOP_K", 10)), help="K nearest neighbors per node")
+    parser.add_argument("--sim_threshold", type=float, default=float(os.getenv("SIM_THRESHOLD", 0.75)), help="Min cosine similarity to add edge")
+    parser.add_argument("--chunk_size", type=int, default=int(os.getenv("CHUNK_SIZE", 1000)), help="Chunk size for similarity computation")
 
-    parser.add_argument("--high_agreement", type=float, default=0.80,
-                        help="Fraction of annotators that must agree for train_mask")
-    parser.add_argument("--med_agreement", type=float, default=0.60,
-                        help="Fraction of annotators that must agree for val_mask")
+    # Agreement Thresholds
+    parser.add_argument("--high_agreement", type=float, default=float(os.getenv("HIGH_AGREEMENT", 0.80)), help="Fraction of annotators that must agree for train_mask")
+    parser.add_argument("--med_agreement", type=float, default=float(os.getenv("MED_AGREEMENT", 0.60)), help="Fraction of annotators that must agree for val_mask")
 
-    parser.add_argument("--output", type=str, default="graph.pt")
+    # Output
+    parser.add_argument("--output", type=str, default=os.getenv("OUTPUT_FILE", "graph.pt"))
 
+    return parser.parse_args()
+
+def load_embeddings(conn_params: dict):
+    """
+    Returns:
+        article_ids : list of str, length N
+        embeddings  : np.ndarray [N, 768]
+        emotions    : np.ndarray [N, 13]
+    """
+    conn = psycopg2.connect(**conn_params)
+    cur  = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    print("[build_graph] Loading embeddings from PostgreSQL...")
+    cur.execute("SELECT article_id, embedding, emotion_scores FROM article_embeddings ORDER BY article_id")
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    article_ids = [r["article_id"] for r in rows]
+    embeddings  = np.array([r["embedding"]     for r in rows], dtype=np.float32)
+    emotions    = np.array([r["emotion_scores"] for r in rows], dtype=np.float32)
+
+    print(f"[build_graph] Loaded {len(article_ids):,} articles")
+    print(f"[build_graph] Embedding shape : {embeddings.shape}")
+    print(f"[build_graph] Emotion shape   : {emotions.shape}")
+
+    return article_ids, embeddings, emotions
 
 def compute_agreement(sg1_path:str, sg2_path:str,id_col,label_col):
 
