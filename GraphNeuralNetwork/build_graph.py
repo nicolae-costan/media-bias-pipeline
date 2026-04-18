@@ -162,6 +162,8 @@ def build_label_tensors(
     y = torch.full((N,), -1, dtype=torch.long)
     train_mask = torch.zeros(N, dtype=torch.bool)
     val_mask = torch.zeros(N, dtype=torch.bool)
+    test_mask = torch.zeros(N, dtype=torch.bool)  # new: medium-low confidence
+    low_conf_mask = torch.zeros(N, dtype=torch.bool)  # new: ambiguous, track only
     weights = torch.zeros(N, dtype=torch.float)
 
     label_map = {"Biased": 1, "Non-biased": 0}
@@ -187,20 +189,23 @@ def build_label_tensors(
 
         weights[idx] = agr
 
-
         if agr >= high_agreement:
             train_mask[idx] = True
         elif agr >= med_agreement:
             val_mask[idx] = True
+        elif agr >= 0.40:
+            test_mask[idx] = True  # has a label but low confidence
+        else:
+            low_conf_mask[idx] = True
 
-    # print overall accuracy
     print(f"[build_graph] BABE articles matched in graph : {labeled_count:,}")
     print(f"[build_graph] BABE articles not in graph     : {unlabeled_count:,}")
-    print(f"[build_graph] train_mask (high agreement)    : {train_mask.sum().item():,}")
-    print(f"[build_graph] val_mask   (med  agreement)    : {val_mask.sum().item():,}")
-    print(f"[build_graph] Unlabeled nodes                : {(y == -1).sum().item():,}")
-
-    return y, train_mask, val_mask, weights
+    print(f"[build_graph] train_mask  (>= {high_agreement}) : {train_mask.sum().item():,}")
+    print(f"[build_graph] val_mask    (>= {med_agreement})  : {val_mask.sum().item():,}")
+    print(f"[build_graph] test_mask   (>= 0.40)             : {test_mask.sum().item():,}")
+    print(f"[build_graph] low_conf    (<  0.40)             : {low_conf_mask.sum().item():,}")
+    print(f"[build_graph] Unlabeled nodes (no BABE label)   : {(y == -1).sum().item():,}")
+    return y, train_mask, val_mask, test_mask, low_conf_mask, weights
 
 
 def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size = 1000):
@@ -309,7 +314,7 @@ def main():
         chunk_size=args.chunk_size,
     )
 
-    y, train_mask, val_mask, weights = build_label_tensors(
+    y, train_mask, val_mask, test_mask, low_conf_mask, weights = build_label_tensors(
         article_ids,
         babe_path=args.babe_csv,
         sg1_path=args.sg1_csv,
@@ -322,15 +327,16 @@ def main():
         med_agreement=args.med_agreement,
     )
 
-
     data = Data(
-        x=x,
+        x=torch.tensor(embeddings, dtype=torch.float),
         emotions=torch.tensor(emotions, dtype=torch.float),
         edge_index=edge_index,
         edge_attr=edge_attr,
         y=y,
         train_mask=train_mask,
         val_mask=val_mask,
+        test_mask=test_mask,
+        low_conf_mask=low_conf_mask,
     )
     # Store article IDs as a plain list (not a tensor) for later lookup
     data.article_ids = article_ids
