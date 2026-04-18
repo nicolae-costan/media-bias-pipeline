@@ -313,9 +313,9 @@ def main():
     # i think we should use only the embeddings not the emotions
     article_ids,embeddings,emotions = load_embeddings(conn_params)
 
-    node_features = np.concatenate([embeddings,emotions],axis = 1)
+    #node_features = np.concatenate([embeddings,emotions],axis = 1)
 
-    x = torch.tensor(node_features, dtype=torch.float)
+    x = torch.tensor(embeddings, dtype=torch.float)
     edge_index, edge_attr = build_edges(
         embeddings,
         top_k=args.top_k,
@@ -339,6 +339,7 @@ def main():
     # 5. Package into PyG Data object
     data = Data(
         x=x,
+        emotions=torch.tensor(emotions, dtype=torch.float),
         edge_index=edge_index,
         edge_attr=edge_attr,
         y=y,
