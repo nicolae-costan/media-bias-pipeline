@@ -128,8 +128,13 @@ class BERTRegressor(pl.LightningModule):
         elif aux_task_str == 'emotions':
             # we have 13 emotions
             self.model = RedditTransformer(self.hparams.encoder_model, 1, self.hparams.extra_dropout, 13)
+            # For best emotion prediction, give the AUX task the larger initial weight.
+            # weights[0] = main task (usVSthem regression)  = 1 - loss_aux_dropout
+            # weights[1] = aux  task (emotion Jaccard)      = 1 + loss_aux_dropout
+            # With loss_aux_dropout=0.25 → main=0.75, aux=1.25
+            # With loss_aux_dropout=0.85 → main=0.15, aux=1.85 (heavy emotion focus)
             self.weights = nn.Parameter(
-                torch.Tensor([1 + self.hparams.loss_aux_dropout, 1 - self.hparams.loss_aux_dropout]),
+                torch.Tensor([1 - self.hparams.loss_aux_dropout, 1 + self.hparams.loss_aux_dropout]),
                 requires_grad=True)
             self.alpha = 0.5
         else:
@@ -576,7 +581,12 @@ class BERTRegressor(pl.LightningModule):
                 {"params": self.weights, "lr": 1e-2},
             ]
         elif self.hparams.aux_task == "emotions":
-            aux_keywords = {"classification_head_aux", "dense_emotions", "layer_emotion"}
+            # Match the ACTUAL parameter names in RedditTransformer:
+            #   BertEncoder  → self.layer_aux  (the split 12th transformer block)
+            #   BertPooler   → self.dense_aux  (the split CLS pooler head)
+            #   BertRegressor → self.classification_head_aux (the output MLP)
+            # Bug was: "dense_emotions" and "layer_emotion" — those names don't exist!
+            aux_keywords = {"classification_head_aux", "dense_aux", "layer_aux"}
             params, aux_params = [], []
             for name, param in self.model.named_parameters():
                 if any(kw in name for kw in aux_keywords):
@@ -584,8 +594,7 @@ class BERTRegressor(pl.LightningModule):
                 else:
                     params.append(param)
             param_groups = [
-                # FIX: Changed learning_rate to encoder_learning_rate
-                {"params": params, "lr": self.hparams.encoder_learning_rate},
+                {"params": params,     "lr": self.hparams.encoder_learning_rate},
                 {"params": aux_params, "lr": self.hparams.encoder_learning_rate * 10},
             ]
         else:
