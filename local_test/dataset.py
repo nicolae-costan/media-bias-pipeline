@@ -11,6 +11,7 @@ import re
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.preprocessing import LabelEncoder
@@ -138,6 +139,29 @@ class MTLCollator:
         return encoded.data, labels
 
 
+def compute_emotion_pos_weights(train_csv: str) -> torch.Tensor:
+    """
+    Compute per-emotion positive class weights from the training set.
+
+    Weight = num_negatives / num_positives for each emotion column.
+    This counteracts class imbalance by making rare positive emotions
+    contribute more to the loss.
+
+    Returns:
+        Tensor of shape [13] with per-emotion positive weights.
+    """
+    df = pd.read_csv(train_csv)
+    emotion_data = df[EMOTION_COLUMNS].values.astype(float)
+    pos_counts = emotion_data.sum(axis=0)  # [13]
+    neg_counts = len(df) - pos_counts
+    # Clamp to avoid division by zero for always-positive columns
+    weights = neg_counts / np.clip(pos_counts, a_min=1.0, a_max=None)
+    # Cap at 10x to prevent extreme weights
+    weights = np.clip(weights, a_min=1.0, a_max=10.0)
+    log.info(f"Emotion pos_weights: {dict(zip(EMOTION_COLUMNS, weights.round(2)))}")
+    return torch.tensor(weights, dtype=torch.float)
+
+
 def build_dataloaders(
     train_csv: str,
     dev_csv: str,
@@ -146,7 +170,7 @@ def build_dataloaders(
     batch_size: int = 16,
     max_length: int = 512,
     num_workers: int = 4,
-) -> Tuple[DataLoader, DataLoader, DataLoader, LabelEncoder]:
+) -> Tuple[DataLoader, DataLoader, DataLoader, LabelEncoder, torch.Tensor]:
     """
     Build train/val/test DataLoaders with a shared LabelEncoder.
 
@@ -154,7 +178,7 @@ def build_dataloaders(
     consistent group-label indexing across train/val/test.
 
     Returns:
-        (train_loader, val_loader, test_loader, group_encoder)
+        (train_loader, val_loader, test_loader, group_encoder, emotion_pos_weights)
     """
     # ── Fit LabelEncoder on ALL splits ──────────────────────────────────
     all_groups = pd.concat([
@@ -167,6 +191,9 @@ def build_dataloaders(
 
     num_groups = len(group_encoder.classes_)
     log.info(f"Social groups ({num_groups}): {list(group_encoder.classes_)}")
+
+    # ── Compute emotion class weights from training data ────────────────
+    emotion_pos_weights = compute_emotion_pos_weights(train_csv)
 
     # ── Build datasets ──────────────────────────────────────────────────
     train_ds = UsVsThemDataset(train_csv, group_encoder)
@@ -200,4 +227,4 @@ def build_dataloaders(
         pin_memory=True,
     )
 
-    return train_loader, val_loader, test_loader, group_encoder
+    return train_loader, val_loader, test_loader, group_encoder, emotion_pos_weights

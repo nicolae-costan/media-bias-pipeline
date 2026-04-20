@@ -46,6 +46,58 @@ EMOTION_COLUMNS: List[str] = [
 NUM_EMOTIONS: int = len(EMOTION_COLUMNS)  # 13
 
 
+class SigmoidFocalLoss(nn.Module):
+    """
+    Focal Loss for multi-label classification (Lin et al., 2017).
+
+    Standard BCE treats all samples equally, so on imbalanced data the model
+    learns to always predict the majority class ("no emotion").  Focal loss
+    down-weights easy-to-classify examples and focuses on hard positives.
+
+    Loss = -alpha_t * (1 - p_t)^gamma * log(p_t)
+
+    Args:
+        alpha:      Balancing factor for positive vs negative (default: 0.25).
+        gamma:      Focusing parameter — higher = more focus on hard examples.
+        pos_weight: Per-class positive weights [C] to further counter imbalance.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.25,
+        gamma: float = 2.0,
+        pos_weight: Optional[torch.Tensor] = None,
+    ) -> None:
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.register_buffer(
+            "pos_weight",
+            pos_weight if pos_weight is not None else torch.ones(1),
+        )
+
+    def forward(
+        self, logits: torch.Tensor, targets: torch.Tensor
+    ) -> torch.Tensor:
+        probs = torch.sigmoid(logits)
+        # p_t = probability of the correct class
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+
+        # alpha_t: use alpha for positives, (1-alpha) for negatives,
+        # then scale positives by per-class pos_weight
+        alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+        # Apply per-class positive weighting
+        weight = self.pos_weight.to(logits.device)
+        alpha_t = alpha_t * (targets * weight + (1 - targets))
+
+        focal_weight = alpha_t * (1 - p_t) ** self.gamma
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits, targets, reduction="none"
+        )
+        loss = focal_weight * bce
+        return loss.mean()
+
+
 class RoBERTaMTL(nn.Module):
     """
     Multi-Task Learning RoBERTa model.
@@ -59,6 +111,7 @@ class RoBERTaMTL(nn.Module):
         num_social_groups: Number of social group classes.
         extra_dropout:     Additional dropout applied on top of model defaults.
         loss_weights:      Per-task loss multipliers for the combined objective.
+        emotion_pos_weights: Per-emotion positive class weights [13] for focal loss.
     """
 
     def __init__(
@@ -68,6 +121,7 @@ class RoBERTaMTL(nn.Module):
         num_social_groups: int = 10,
         extra_dropout: float = 0.1,
         loss_weights: Optional[Dict[str, float]] = None,
+        emotion_pos_weights: Optional[torch.Tensor] = None,
     ) -> None:
         super().__init__()
 
@@ -130,14 +184,20 @@ class RoBERTaMTL(nn.Module):
         # ── 5. Weight init for new components ───────────────────────────
         self._init_custom_weights()
 
-        # ── 6. Ablation state ───────────────────────────────────────────
+        # ── 6. Focal loss for emotions ──────────────────────────────────
+        self.emotion_loss_fn = SigmoidFocalLoss(
+            alpha=0.25, gamma=2.0, pos_weight=emotion_pos_weights
+        )
+
+        # ── 7. Ablation state ───────────────────────────────────────────
         self._ablate_social: bool = False
         self.num_emotions = num_emotions
         self.num_social_groups = num_social_groups
 
         log.info(
             f"RoBERTaMTL initialized: emotions={num_emotions}, "
-            f"social_groups={num_social_groups}, ablate={self._ablate_social}"
+            f"social_groups={num_social_groups}, ablate={self._ablate_social}, "
+            f"emotion_loss=FocalLoss(gamma=2.0)"
         )
 
     # ── Weight Initialization ───────────────────────────────────────────
@@ -279,9 +339,7 @@ class RoBERTaMTL(nn.Module):
             has_loss = True
 
         if labels_emotion is not None:
-            loss_emotion = nn.functional.binary_cross_entropy_with_logits(
-                emotion_logits, labels_emotion
-            )
+            loss_emotion = self.emotion_loss_fn(emotion_logits, labels_emotion)
             total_loss = total_loss + self.loss_weights["emotion"] * loss_emotion
             results["loss_emotion"] = loss_emotion
             has_loss = True

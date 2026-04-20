@@ -80,6 +80,8 @@ def parse_args() -> argparse.Namespace:
                    help="Max epochs for Phase 2 (social group ablated)")
     p.add_argument("--patience", type=int, default=5,
                    help="Early stopping patience (epochs)")
+    p.add_argument("--accumulate_grad_batches", type=int, default=1,
+                   help="Gradient accumulation steps (effective batch = batch_size * this)")
 
     # ── Hardware ────────────────────────────────────────────────────────
     p.add_argument("--device", type=str, default="auto",
@@ -126,7 +128,7 @@ def main() -> None:
 
     # ── Data ────────────────────────────────────────────────────────────
     log.info("Loading datasets...")
-    train_loader, val_loader, test_loader, group_encoder = build_dataloaders(
+    train_loader, val_loader, test_loader, group_encoder, emotion_pos_weights = build_dataloaders(
         train_csv=args.train_csv,
         dev_csv=args.dev_csv,
         test_csv=args.test_csv,
@@ -150,6 +152,7 @@ def main() -> None:
             "emotion": args.weight_emotion,
             "social": args.weight_social,
         },
+        emotion_pos_weights=emotion_pos_weights,
     )
 
     total_params = sum(p.numel() for p in model.parameters())
@@ -157,6 +160,8 @@ def main() -> None:
     log.info(f"Model parameters: {total_params:,} total, {trainable:,} trainable")
 
     # ── Trainer ─────────────────────────────────────────────────────────
+    from dataset import EMOTION_COLUMNS
+
     trainer = BiasTrainer(
         model=model,
         train_loader=train_loader,
@@ -170,6 +175,9 @@ def main() -> None:
         warmup_proportion=args.warmup_proportion,
         output_dir=args.output_dir,
         patience=args.patience,
+        emotion_columns=EMOTION_COLUMNS,
+        group_classes=list(group_encoder.classes_),
+        accumulate_grad_batches=args.accumulate_grad_batches,
     )
 
     # ── Run ──────────────────────────────────────────────────────────────

@@ -13,12 +13,16 @@ import csv
 import logging
 import time
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
+import seaborn as sn
 import torch
 import torch.nn as nn
-from sklearn.metrics import jaccard_score
+from sklearn.metrics import confusion_matrix, jaccard_score
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -78,6 +82,7 @@ class BiasTrainer:
         warmup_proportion:  Fraction of total steps used for LR warmup.
         output_dir:         Directory for checkpoints, logs, predictions.
         patience:           Early stopping patience (epochs without improvement).
+        accumulate_grad_batches: Number of batches to accumulate before stepping.
     """
 
     def __init__(
@@ -94,6 +99,9 @@ class BiasTrainer:
         warmup_proportion: float = 0.1,
         output_dir: str = "outputs",
         patience: int = 5,
+        emotion_columns: Optional[List[str]] = None,
+        group_classes: Optional[List[str]] = None,
+        accumulate_grad_batches: int = 1,
     ) -> None:
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -107,6 +115,13 @@ class BiasTrainer:
         self.warmup_proportion = warmup_proportion
         self.output_dir = Path(output_dir)
         self.patience = patience
+        self.accum_steps = accumulate_grad_batches
+        self.emotion_columns = emotion_columns or [
+            "Anger", "Contempt", "Disgust", "Fear", "Gratitude", "Guilt",
+            "Happiness", "Hope", "Pride", "Relief", "Sadness", "Sympathy",
+            "Emotions_Neutral",
+        ]
+        self.group_classes = group_classes or []
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.writer = SummaryWriter(log_dir=str(self.output_dir / "tb_logs"))
@@ -170,7 +185,9 @@ class BiasTrainer:
             leave=False,
         )
 
-        for inputs, labels in pbar:
+        optimizer.zero_grad()
+
+        for batch_idx, (inputs, labels) in enumerate(pbar):
             # ── Move to device ──────────────────────────────────────────
             input_ids = inputs["input_ids"].to(self.device)
             attn_mask = inputs["attention_mask"].to(self.device)
@@ -193,23 +210,27 @@ class BiasTrainer:
                 labels_social=labels_social,
             )
 
-            loss = outputs["loss"]
+            # Scale loss by accumulation steps for correct averaging
+            loss = outputs["loss"] / self.accum_steps
 
-            # ── Backward ────────────────────────────────────────────────
-            optimizer.zero_grad()
+            # ── Backward (accumulate) ───────────────────────────────────
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
+
+            # ── Step only every N batches ───────────────────────────────
+            if (batch_idx + 1) % self.accum_steps == 0 or (batch_idx + 1) == len(self.train_loader):
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
 
             # ── Logging ─────────────────────────────────────────────────
-            total_loss += loss.item()
+            total_loss += outputs["loss"].item()  # log unscaled loss
             num_batches += 1
             self.global_step += 1
 
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+            pbar.set_postfix({"loss": f"{outputs['loss'].item():.4f}"})
 
-            self.writer.add_scalar("train/loss", loss.item(), self.global_step)
+            self.writer.add_scalar("train/loss", outputs["loss"].item(), self.global_step)
             if "loss_bias" in outputs:
                 self.writer.add_scalar(
                     "train/loss_bias", outputs["loss_bias"].item(), self.global_step
@@ -284,22 +305,70 @@ class BiasTrainer:
         # ── Aggregate ───────────────────────────────────────────────────
         metrics: Dict[str, float] = {}
         metrics["loss"] = float(np.mean(all_loss))
-        metrics["pearson_r"] = pearson_correlation(
-            torch.cat(all_bias_true), torch.cat(all_bias_pred)
-        )
-        metrics["emotion_jaccard"] = emotion_jaccard(
-            torch.cat(all_emo_true), torch.cat(all_emo_pred)
-        )
-        if all_soc_true:
-            metrics["social_accuracy"] = social_accuracy(
-                torch.cat(all_soc_true), torch.cat(all_soc_pred)
-            )
 
-        # ── TensorBoard ────────────────────────────────────────────────
+        cat_bias_true = torch.cat(all_bias_true)
+        cat_bias_pred = torch.cat(all_bias_pred)
+        cat_emo_true  = torch.cat(all_emo_true)
+        cat_emo_pred  = torch.cat(all_emo_pred)
+
+        metrics["pearson_r"] = pearson_correlation(cat_bias_true, cat_bias_pred)
+        metrics["emotion_jaccard"] = emotion_jaccard(cat_emo_true, cat_emo_pred)
+
+        if all_soc_true:
+            cat_soc_true = torch.cat(all_soc_true)
+            cat_soc_pred = torch.cat(all_soc_pred)
+            metrics["social_accuracy"] = social_accuracy(cat_soc_true, cat_soc_pred)
+
+        # ── TensorBoard: scalar metrics ─────────────────────────────────
         for key, val in metrics.items():
             self.writer.add_scalar(f"{tag}/{key}", val, epoch)
 
+        # ── Confusion Matrices ──────────────────────────────────────────
+        # Emotion confusion matrix (argmax over 13 columns)
+        emo_pred_labels = (torch.sigmoid(cat_emo_pred) > 0.5).cpu().numpy().argmax(axis=1)
+        emo_true_labels = cat_emo_true.cpu().numpy().argmax(axis=1)
+        emo_cm = confusion_matrix(
+            emo_true_labels, emo_pred_labels,
+            labels=np.arange(len(self.emotion_columns)),
+        )
+        fig_emo = self._plot_confusion_matrix(
+            emo_cm, self.emotion_columns, title=f"Emotion Confusion Matrix ({tag})"
+        )
+        self.writer.add_figure(f"{tag}/confusion_matrix_emotion", fig_emo, epoch)
+        fig_emo.savefig(self.output_dir / f"cm_emotion_{tag}_e{epoch}.png", dpi=100, bbox_inches="tight")
+        plt.close(fig_emo)
+
+        # Social group confusion matrix (only when not ablated)
+        if all_soc_true and self.group_classes:
+            soc_pred_labels = torch.argmax(cat_soc_pred, dim=1).cpu().numpy()
+            soc_true_labels = cat_soc_true.cpu().numpy()
+            soc_cm = confusion_matrix(
+                soc_true_labels, soc_pred_labels,
+                labels=np.arange(len(self.group_classes)),
+            )
+            fig_soc = self._plot_confusion_matrix(
+                soc_cm, self.group_classes, title=f"Social Group Confusion Matrix ({tag})"
+            )
+            self.writer.add_figure(f"{tag}/confusion_matrix_social", fig_soc, epoch)
+            fig_soc.savefig(self.output_dir / f"cm_social_{tag}_e{epoch}.png", dpi=100, bbox_inches="tight")
+            plt.close(fig_soc)
+
         return metrics
+
+    @staticmethod
+    def _plot_confusion_matrix(
+        cm: np.ndarray, labels: List[str], title: str = "Confusion Matrix"
+    ) -> plt.Figure:
+        """Render a confusion matrix as a seaborn heatmap figure."""
+        fig, ax = plt.subplots(figsize=(max(10, len(labels)), max(7, len(labels) * 0.7)))
+        sn.heatmap(cm.astype(float), annot=True, fmt=".0f", ax=ax, cmap="Blues")
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("True")
+        ax.set_title(title)
+        ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+        ax.set_yticklabels(labels, rotation=0, fontsize=8)
+        fig.tight_layout()
+        return fig
 
     # ── Checkpoint ──────────────────────────────────────────────────────
 
