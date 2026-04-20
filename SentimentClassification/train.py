@@ -7,7 +7,6 @@ from pathlib import Path
 
 # Ensure this matches your filename: BertRegression.py
 from BertRegression import BERTRegressor as BERTClassifier
-from RoBERTaRegression import RoBERTaRegressor as RoBERTaClassifier
 from pytorch_lightning import Trainer, seed_everything # Use built-in seed
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -31,12 +30,8 @@ def main(hparams) -> None:
 
     # 1. INIT LIGHTNING MODEL
     # ------------------------
-    if hparams.model_type == "roberta":
-        print(f"--- Using RoBERTa Backbone ({hparams.encoder_model}) ---")
-        model = RoBERTaClassifier(hparams)
-    else:
-        print(f"--- Using BERT Backbone ({hparams.encoder_model}) ---")
-        model = BERTClassifier(hparams)
+    print(f"--- Using BERT Backbone ({hparams.encoder_model}) ---")
+    model = BERTClassifier(hparams)
 
     # ------------------------
     # 2. INIT LOGGER (Local TensorBoard)
@@ -126,8 +121,8 @@ if __name__ == "__main__":
         default="bert",
         tunable=False,
         type=str,
-        options=["bert", "roberta"],
-        help="The architecture to use for training",
+        options=["bert"],
+        help="The architecture to use for training (currently only BERT is supported)",
     )
 
     # Hardware & Batching
@@ -140,14 +135,13 @@ if __name__ == "__main__":
     parser.add_argument("--search_mode", default=False, type=bool)
 
     # Add model-specific arguments
-    # If using RoBERTa, it will still use similar arguments for now
     parser = BERTClassifier.add_model_specific_args(parser)
     hparams = parser.parse_args()
 
-    # Set default encoder model based on type if not explicitly provided
-    # (Note: HyperOptArgumentParser handle defaults, but we ensure consistency here)
-    if hparams.model_type == "roberta" and hparams.encoder_model == "bert-base-uncased":
-        hparams.encoder_model = "roberta-base"
+    # Set default encoder model based on type (currently always bert-base-uncased)
+    if hparams.encoder_model == "roberta-base":
+        print("WARNING: RoBERTa backbone requested but RoBERTa classes were removed. Falling back to bert-base-uncased.")
+        hparams.encoder_model = "bert-base-uncased"
 
     if not hparams.search_mode:
         main(hparams)
