@@ -208,7 +208,7 @@ class BERTRegressor(pl.LightningModule):
             norms = torch.stack(norms)
 
             # take the losses at the beginning of the batch processing
-            if self.trainer.global_step == 0:
+            if getattr(self, "initial_loses", None) is None or self.trainer.global_step == 0:
                 self.initial_loses = loss.detach()
 
             with torch.no_grad():
@@ -218,7 +218,7 @@ class BERTRegressor(pl.LightningModule):
                 inverse_train_rates = loss_ratios / loss_ratios.mean()
 
                 # use the average of the means to compute the new target for the force of the task
-                constant_term = norms.mean() * (inverse_train_rates ** self.alpha)
+                constant_term = (norms.mean() * (inverse_train_rates ** self.alpha)).detach()
 
             # Output - Target take its derivative and modify weight main task and auxiliary task
             grad_norm_loss = (norms - constant_term).abs().sum()
@@ -239,6 +239,8 @@ class BERTRegressor(pl.LightningModule):
         # Phase 2: The Multi-Task Safety Net
         if str(getattr(self.hparams, 'aux_task', 'None')) != 'None':
             with torch.no_grad():
+                # Prevent negative weights which invert loss
+                self.weights.data = torch.clamp(self.weights.data, min=1e-4)
                 # Keep the normalization so weights always add up to 2
                 normalize_coeff = len(self.weights) / self.weights.sum()
                 self.weights.data = self.weights.data * normalize_coeff
@@ -268,7 +270,7 @@ class BERTRegressor(pl.LightningModule):
         elif self.hparams.aux_task == "emotions":
             labels_hat = (torch.sigmoid(y_aux_hat) > 0.5)
             # jaccard_score requires CPU — unavoidable
-            acc = jaccard_score(y_aux.cpu().numpy(), labels_hat.cpu().numpy(), average="macro")
+            acc = jaccard_score(y_aux.cpu().numpy().astype(int), labels_hat.cpu().numpy().astype(int), average="macro")
             acc = float(acc)
 
             # FIX: was hardcoded to self._dev_dataset.columns — now uses the passed-in columns
