@@ -16,7 +16,7 @@ from torch import optim
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import get_linear_schedule_with_warmup
 
-from dataloader import sentiment_analysis_dataset, MyCollator
+from dataloader import sentiment_analysis_dataset, MyCollator, EMOTION_COLS
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -126,8 +126,8 @@ class BERTRegressor(pl.LightningModule):
                 requires_grad=True)
             self.alpha = 0.5
         elif aux_task_str == 'emotions':
-            # we have 13 emotions
-            self.model = RedditTransformer(self.hparams.encoder_model, 1, self.hparams.extra_dropout, 13)
+            # Build model with only the learnable emotion classes (defined in EMOTION_COLS)
+            self.model = RedditTransformer(self.hparams.encoder_model, 1, self.hparams.extra_dropout, len(EMOTION_COLS))
             # For best emotion prediction, give the AUX task the larger initial weight.
             # weights[0] = main task (usVSthem regression)  = 1 - loss_aux_dropout
             # weights[1] = aux  task (emotion Jaccard)      = 1 + loss_aux_dropout
@@ -146,7 +146,22 @@ class BERTRegressor(pl.LightningModule):
         self._loss = nn.MSELoss()
 
         if self.hparams.aux_task == 'emotions':
-            self._loss_aux = nn.BCEWithLogitsLoss()  # FIX: was self.loss_aux — missing _ prefix
+            # Compute class-balanced pos_weight from training data.
+            # pos_weight[i] = neg_count[i] / pos_count[i]
+            # This forces the model to put proportionally MORE penalty on
+            # missing rare emotions (e.g., Relief: 20 samples → weight≈183)
+            # vs common ones (e.g., Contempt: 1396 samples → weight≈1.6).
+            # Without this, the model learns to predict 0 for rare classes
+            # because that's the safest path to a low average BCE loss.
+            train_df   = pd.read_csv(self.hparams.train_csv)
+            pos_counts = train_df[EMOTION_COLS].sum().values.astype(float)   # (N_emotions,)
+            neg_counts = (len(train_df) - pos_counts).astype(float)
+            # Clamp min to 1 to avoid div-by-zero for any class with 0 positives
+            pos_weight = torch.tensor(
+                neg_counts / np.maximum(pos_counts, 1.0), dtype=torch.float32
+            )
+            log.info(f"BCEWithLogitsLoss pos_weight: {pos_weight.tolist()}")
+            self._loss_aux = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         else:
             self._loss_aux = nn.CrossEntropyLoss()  # FIX: was self.loss_aux — missing _ prefix
 
@@ -595,7 +610,10 @@ class BERTRegressor(pl.LightningModule):
                     params.append(param)
             param_groups = [
                 {"params": params,     "lr": self.hparams.encoder_learning_rate},
-                {"params": aux_params, "lr": self.hparams.encoder_learning_rate * 10},
+                # Reduced from 10x → 3x: the emotion head still learns faster than
+                # the shared BERT backbone, but 10x was causing rapid memorization
+                # of the small training set (3,683 examples) and severe overfitting.
+                {"params": aux_params, "lr": self.hparams.encoder_learning_rate * 3},
             ]
         else:
             param_groups = [
