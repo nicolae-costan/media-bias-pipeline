@@ -1,40 +1,55 @@
+"""
+RoBERTa Multi-Label Emotion Classifier (v2 — Advanced)
+=======================================================
+Fixes majority-class collapse with:
+  1. Asymmetric Loss (replaces BCE)
+  2. Per-class dynamic thresholding (replaces hard 0.5)
+  3. MLP classification head (replaces single Linear)
+  4. Differential learning rates + layer freezing
+"""
 import os
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from transformers import RobertaTokenizer, RobertaModel, get_linear_schedule_with_warmup
 from torch.optim import AdamW
 from sklearn.metrics import f1_score, hamming_loss, jaccard_score
 from tqdm import tqdm
 
-# --- 1. DATA SETUP ---
+# ============================================================================
+# EMOTION COLUMNS — single source of truth
+# ============================================================================
+EMOTION_COLUMNS = [
+    'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude', 'Guilt',
+    'Happiness', 'Hope', 'Pride', 'Relief', 'Sadness', 'Sympathy',
+    'Emotions_Neutral'
+]
+NUM_CLASSES = len(EMOTION_COLUMNS)  # 13
+
+# ============================================================================
+# 1. DATA SETUP
+# ============================================================================
 
 class EmotionDataset(Dataset):
     """
     Dataset for multi-label emotion classification.
-    Handles tokenization and multi-hot encoding of 13 emotions.
+    Reads a CSV with a 'body' text column and 13 binary emotion columns.
     """
     def __init__(self, csv_path, tokenizer, max_length=128):
         self.df = pd.read_csv(csv_path)
         self.tokenizer = tokenizer
         self.max_length = max_length
-        
-        # The 13 target emotions as specified
-        self.emotion_columns = [
-            'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude', 'Guilt', 
-            'Happiness', 'Hope', 'Pride', 'Relief', 'Sadness', 'Sympathy', 
-            'Emotions_Neutral'
-        ]
-        
+
     def __len__(self):
         return len(self.df)
-    
+
     def __getitem__(self, idx):
         text = str(self.df.iloc[idx]['body'])
-        labels = self.df.iloc[idx][self.emotion_columns].values.astype(float)
-        
+        labels = self.df.iloc[idx][EMOTION_COLUMNS].values.astype(np.float32)
+
         encoding = self.tokenizer(
             text,
             add_special_tokens=True,
@@ -44,180 +59,422 @@ class EmotionDataset(Dataset):
             return_attention_mask=True,
             return_tensors='pt'
         )
-        
+
         return {
-            'input_ids': encoding['input_ids'].flatten(),
-            'attention_mask': encoding['attention_mask'].flatten(),
-            'labels': torch.tensor(labels, dtype=torch.float)
+            'input_ids':      encoding['input_ids'].flatten(),
+            'attention_mask':  encoding['attention_mask'].flatten(),
+            'labels':          torch.tensor(labels, dtype=torch.float)
         }
+
 
 def calculate_pos_weights(csv_path):
     """
-    Calculates positive class weights (pos_weight) to handle imbalance.
-    Formula: pos_weight = (num_negative_samples) / (num_positive_samples)
+    pos_weight_j = num_negatives_j / num_positives_j
+    Used only for diagnostic printing; the Asymmetric Loss handles
+    imbalance internally.
     """
     df = pd.read_csv(csv_path)
-    emotion_columns = [
-        'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude', 'Guilt', 
-        'Happiness', 'Hope', 'Pride', 'Relief', 'Sadness', 'Sympathy', 
-        'Emotions_Neutral'
-    ]
-    
-    labels = df[emotion_columns].values
-    pos_counts = np.sum(labels, axis=0)
-    neg_counts = len(df) - pos_counts
-    
-    # Avoid division by zero with small epsilon
-    pos_weights = neg_counts / (pos_counts + 1e-6)
-    return torch.tensor(pos_weights, dtype=torch.float)
+    labels = df[EMOTION_COLUMNS].values
+    pos = labels.sum(axis=0)
+    neg = len(df) - pos
+    weights = neg / (pos + 1e-6)
+    return torch.tensor(weights, dtype=torch.float)
 
-# --- 2. MODEL INITIALIZATION ---
+
+# ============================================================================
+# 2. ASYMMETRIC LOSS  (replaces BCEWithLogitsLoss)
+# ============================================================================
+# Reference:  Emanuel Ben-Baruch et al., "Asymmetric Loss for Multi-Label
+#             Classification", ICCV 2021.
+#
+# Core idea:  Two separate focusing parameters:
+#   • gamma_pos  — down-weights *easy positives* (high-confidence correct 1s)
+#   • gamma_neg  — down-weights *easy negatives* (high-confidence correct 0s)
+#                  Setting gamma_neg > gamma_pos forces the model to focus on
+#                  hard positives (rare classes it keeps missing).
+#
+# Probability shifting (clip):
+#   Before computing the negative part of the loss we shift p_neg down by
+#   `clip`, i.e.  p_neg_shifted = max(p_neg - clip, 0).
+#   This acts as a hard-negative mining knob: anything the model is already
+#   confident is negative gets zero gradient, freeing capacity for positives.
+# ============================================================================
+
+class AsymmetricLoss(nn.Module):
+    """
+    Asymmetric Loss for multi-label classification.
+
+    Args:
+        gamma_neg (float): Focusing parameter for negatives  (default 4).
+        gamma_pos (float): Focusing parameter for positives  (default 1).
+        clip      (float): Probability-margin clipping for negatives (default 0.05).
+        eps       (float): Label smoothing epsilon            (default 0.1).
+    """
+    def __init__(self, gamma_neg=4, gamma_pos=1, clip=0.05, eps=0.1):
+        super().__init__()
+        self.gamma_neg = gamma_neg
+        self.gamma_pos = gamma_pos
+        self.clip = clip
+        self.eps = eps
+
+    def forward(self, logits, targets):
+        # --- Probabilities via sigmoid ---
+        probs = torch.sigmoid(logits)
+        # Numerical safety
+        probs = probs.clamp(min=1e-7, max=1 - 1e-7)
+
+        # --- Separate positive / negative probabilities ---
+        probs_pos = probs          # p   when y=1
+        probs_neg = 1.0 - probs    # 1-p when y=0
+
+        # --- Probability shifting (hard-negative mining for negatives) ---
+        if self.clip > 0:
+            # Shift the negative probabilities DOWN so easy negatives → 0 loss
+            probs_neg = (probs_neg + self.clip).clamp(max=1.0)
+
+        # --- Basic cross-entropy components ---
+        loss_pos = -targets * torch.log(probs_pos)
+        loss_neg = -(1 - targets) * torch.log(probs_neg)
+
+        # --- Focal modulation ---
+        if self.gamma_pos > 0:
+            # Down-weight easy positives: the model is already confident
+            focal_weight_pos = (1.0 - probs_pos) ** self.gamma_pos
+            loss_pos = loss_pos * focal_weight_pos
+
+        if self.gamma_neg > 0:
+            # Aggressively down-weight easy negatives
+            focal_weight_neg = probs ** self.gamma_neg   # probs (not probs_neg)
+            loss_neg = loss_neg * focal_weight_neg
+
+        # --- Label smoothing ---
+        if self.eps > 0:
+            loss_pos = loss_pos * (1 - self.eps) + self.eps * loss_neg
+            loss_neg = loss_neg * (1 - self.eps) + self.eps * loss_pos
+
+        loss = loss_pos + loss_neg
+        return loss.mean()
+
+
+# ============================================================================
+# 3. MODEL — RoBERTa + MLP Head + Layer Freezing
+# ============================================================================
 
 class RoBERTaEmotionClassifier(nn.Module):
     """
-    RoBERTa-based multi-label classifier.
-    Outputs raw logits for BCEWithLogitsLoss.
+    RoBERTa-base encoder with:
+      • First 8 transformer layers FROZEN (retain linguistic priors)
+      • Last 4 layers + pooler fine-tuned with a small LR
+      • A 2-layer MLP classification head trained with a larger LR
+
+    The forward pass returns raw logits (no sigmoid).
     """
-    def __init__(self, n_classes=13):
-        super(RoBERTaEmotionClassifier, self).__init__()
+    def __init__(self, n_classes=NUM_CLASSES, head_dropout=0.2):
+        super().__init__()
         self.roberta = RobertaModel.from_pretrained('roberta-base')
-        self.dropout = nn.Dropout(0.1)
-        # Custom head mapping 768 to 13 logits
-        self.classifier = nn.Linear(self.roberta.config.hidden_size, n_classes)
-        
+        hidden = self.roberta.config.hidden_size  # 768
+
+        # --- MLP classification head ---
+        # Linear(768→768) → GELU → Dropout → Linear(768→13)
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.GELU(),
+            nn.Dropout(head_dropout),
+            nn.Linear(hidden, n_classes),
+        )
+
+        # Xavier init for the head so it starts in a good region
+        for m in self.classifier:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias)
+
+        # --- Freeze first 8 encoder layers ---
+        self._freeze_layers(n_freeze=8)
+
+    # -----------------------------------------------------------------
+    def _freeze_layers(self, n_freeze=8):
+        """Freeze embeddings + first `n_freeze` transformer layers."""
+        # Freeze embeddings
+        for p in self.roberta.embeddings.parameters():
+            p.requires_grad = False
+
+        # Freeze layers 0 .. n_freeze-1
+        for layer_idx in range(n_freeze):
+            for p in self.roberta.encoder.layer[layer_idx].parameters():
+                p.requires_grad = False
+
+        # Diagnostic: count trainable params
+        total   = sum(p.numel() for p in self.parameters())
+        frozen  = sum(p.numel() for p in self.parameters() if not p.requires_grad)
+        print(f"[Model] Total params: {total:,}  |  "
+              f"Frozen: {frozen:,}  |  Trainable: {total - frozen:,}")
+
+    # -----------------------------------------------------------------
     def forward(self, input_ids, attention_mask):
-        # We use the pooled output ([CLS] token equivalent in RoBERTa)
-        outputs = self.roberta(input_ids=input_ids, attention_mask=attention_mask)
-        pooled_output = outputs.pooler_output
-        x = self.dropout(pooled_output)
-        logits = self.classifier(x)
+        outputs = self.roberta(input_ids=input_ids,
+                               attention_mask=attention_mask)
+        pooled = outputs.pooler_output          # [B, 768]
+        logits = self.classifier(pooled)        # [B, 13]
         return logits
 
-# --- 3. TRAINING & EVALUATION LOOPS ---
+    # -----------------------------------------------------------------
+    def get_param_groups(self, lr_encoder=1e-5, lr_head=5e-4,
+                         weight_decay=0.01):
+        """
+        Build two optimizer param groups:
+          1. Unfrozen RoBERTa layers  → small LR  (lr_encoder)
+          2. MLP classification head  → large LR  (lr_head)
+        """
+        encoder_params = [
+            p for n, p in self.roberta.named_parameters() if p.requires_grad
+        ]
+        head_params = list(self.classifier.parameters())
 
-def evaluate(model, data_loader, device, criterion):
+        return [
+            {'params': encoder_params,
+             'lr': lr_encoder,
+             'weight_decay': weight_decay},
+            {'params': head_params,
+             'lr': lr_head,
+             'weight_decay': weight_decay},
+        ]
+
+
+# ============================================================================
+# 4. PER-CLASS DYNAMIC THRESHOLD SEARCH
+# ============================================================================
+
+def find_optimal_thresholds(all_probs, all_targets, grid_start=0.1,
+                            grid_end=0.9, grid_step=0.05):
+    """
+    For EACH of the 13 emotion classes independently, sweep over a range of
+    thresholds and pick the one that maximises per-class F1.
+
+    Args:
+        all_probs:   np.ndarray  [N, 13]  sigmoid probabilities
+        all_targets: np.ndarray  [N, 13]  ground-truth multi-hot
+
+    Returns:
+        best_thresholds: np.ndarray [13]
+    """
+    n_classes = all_targets.shape[1]
+    thresholds = np.arange(grid_start, grid_end + 1e-9, grid_step)
+    best_thresholds = np.full(n_classes, 0.5)
+
+    for cls_idx in range(n_classes):
+        best_f1 = -1.0
+        y_true = all_targets[:, cls_idx]
+
+        for t in thresholds:
+            y_pred = (all_probs[:, cls_idx] >= t).astype(int)
+            f1 = f1_score(y_true, y_pred, zero_division=0)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thresholds[cls_idx] = t
+
+    return best_thresholds
+
+
+# ============================================================================
+# 5. EVALUATION
+# ============================================================================
+
+def evaluate(model, data_loader, device, criterion, thresholds=None):
+    """
+    Runs the model on `data_loader` and computes:
+      • Loss (Asymmetric)
+      • Macro / Micro F1
+      • Hamming Loss
+      • Macro Jaccard
+
+    If `thresholds` is None, we first run a threshold search on the same data
+    and then report metrics with the optimal thresholds.  Otherwise the
+    supplied thresholds are reused (e.g. applying val thresholds to test).
+
+    Returns:
+        metrics    (dict)       — aggregated scores
+        thresholds (np.ndarray) — the per-class thresholds that were used
+    """
     model.eval()
     losses = []
+    all_probs = []
     all_targets = []
-    all_preds = []
-    
+
     with torch.no_grad():
         for batch in data_loader:
-            input_ids = batch['input_ids'].to(device)
+            input_ids      = batch['input_ids'].to(device)
             attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            
+            labels         = batch['labels'].to(device)
+
             logits = model(input_ids, attention_mask)
-            loss = criterion(logits, labels)
+            loss   = criterion(logits, labels)
             losses.append(loss.item())
-            
-            # Use 0.5 threshold for metrics
-            preds = (torch.sigmoid(logits) > 0.5).cpu().numpy()
-            targets = labels.cpu().numpy()
-            
-            all_preds.extend(preds)
-            all_targets.extend(targets)
-            
-    all_preds = np.array(all_preds)
-    all_targets = np.array(all_targets)
-    
+
+            probs = torch.sigmoid(logits).cpu().numpy()
+            all_probs.append(probs)
+            all_targets.append(labels.cpu().numpy())
+
+    all_probs   = np.concatenate(all_probs,   axis=0)
+    all_targets = np.concatenate(all_targets, axis=0)
+
+    # --- Dynamic threshold search (per-class) ---
+    if thresholds is None:
+        thresholds = find_optimal_thresholds(all_probs, all_targets)
+        print(f"  Optimal thresholds per class:")
+        for name, t in zip(EMOTION_COLUMNS, thresholds):
+            print(f"    {name:20s}  →  {t:.2f}")
+
+    # --- Apply thresholds ---
+    all_preds = (all_probs >= thresholds[np.newaxis, :]).astype(int)
+
     metrics = {
-        'loss': np.mean(losses),
-        'macro_f1': f1_score(all_targets, all_preds, average='macro'),
-        'micro_f1': f1_score(all_targets, all_preds, average='micro'),
-        'hamming_loss': hamming_loss(all_targets, all_preds),
-        'macro_jaccard': jaccard_score(all_targets, all_preds, average='macro')
+        'loss':           np.mean(losses),
+        'macro_f1':       f1_score(all_targets, all_preds, average='macro',
+                                   zero_division=0),
+        'micro_f1':       f1_score(all_targets, all_preds, average='micro',
+                                   zero_division=0),
+        'hamming_loss':   hamming_loss(all_targets, all_preds),
+        'macro_jaccard':  jaccard_score(all_targets, all_preds, average='macro',
+                                        zero_division=0),
     }
-    
-    return metrics
+
+    # --- Per-class F1 breakdown (very useful for debugging imbalance) ---
+    per_class_f1 = f1_score(all_targets, all_preds, average=None,
+                            zero_division=0)
+    print("  Per-class F1:")
+    for name, f in zip(EMOTION_COLUMNS, per_class_f1):
+        print(f"    {name:20s}  →  {f:.4f}")
+
+    return metrics, thresholds
+
+
+# ============================================================================
+# 6. TRAINING LOOP
+# ============================================================================
 
 def train():
-    # Configuration
-    TRAIN_CSV = 'Resources/UsVsThem_train_public.csv'
-    VAL_CSV = 'Resources/UsVsThem_valid_public.csv'
-    BATCH_SIZE = 16
-    MAX_LEN = 128
-    EPOCHS = 5
-    LEARNING_RATE = 3e-5
-    WEIGHT_DECAY = 0.01
+    # ----- Configuration -----
+    TRAIN_CSV       = 'Resources/UsVsThem_train_public.csv'
+    VAL_CSV         = 'Resources/UsVsThem_valid_public.csv'
+    BATCH_SIZE      = 16
+    MAX_LEN         = 128
+    EPOCHS          = 5
+    LR_ENCODER      = 1e-5       # small LR for unfrozen RoBERTa layers
+    LR_HEAD         = 5e-4       # larger LR for the MLP head
+    WEIGHT_DECAY    = 0.01
+    PATIENCE        = 3          # more patience — ASL converges slower than BCE
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # Initialize Tokenizer
+    print(f"[Config] Device: {DEVICE}")
+
+    # ----- Tokenizer -----
     tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
-    
-    # Datasets & Loaders
+
+    # ----- Datasets & Loaders -----
     train_dataset = EmotionDataset(TRAIN_CSV, tokenizer, MAX_LEN)
-    val_dataset = EmotionDataset(VAL_CSV, tokenizer, MAX_LEN)
-    
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE)
-    
-    # Handle Class Imbalance
-    pos_weights = calculate_pos_weights(TRAIN_CSV).to(DEVICE)
-    print(f"Calculated pos_weights: {pos_weights}")
-    
-    # Model, Optimizer, Loss
-    model = RoBERTaEmotionClassifier(n_classes=13).to(DEVICE)
-    optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weights)
-    
-    # Scheduler
-    total_steps = len(train_loader) * EPOCHS
+    val_dataset   = EmotionDataset(VAL_CSV,   tokenizer, MAX_LEN)
+    train_loader  = DataLoader(train_dataset, batch_size=BATCH_SIZE,
+                               shuffle=True,  num_workers=2, pin_memory=True)
+    val_loader    = DataLoader(val_dataset,   batch_size=BATCH_SIZE,
+                               shuffle=False, num_workers=2, pin_memory=True)
+
+    # ----- Diagnostic: class distribution -----
+    pos_weights = calculate_pos_weights(TRAIN_CSV)
+    print(f"\n[Data] Class pos_weights (for reference):")
+    for name, w in zip(EMOTION_COLUMNS, pos_weights):
+        print(f"  {name:20s}  →  {w:.2f}")
+
+    # ----- Model -----
+    model = RoBERTaEmotionClassifier(n_classes=NUM_CLASSES).to(DEVICE)
+
+    # ----- Asymmetric Loss -----
+    # gamma_neg=4 aggressively down-weights easy negatives;
+    # gamma_pos=1 keeps the loss sensitive to hard positives.
+    criterion = AsymmetricLoss(gamma_neg=4, gamma_pos=1, clip=0.05, eps=0.1)
+
+    # ----- Optimizer with differential LRs -----
+    param_groups = model.get_param_groups(lr_encoder=LR_ENCODER,
+                                          lr_head=LR_HEAD,
+                                          weight_decay=WEIGHT_DECAY)
+    optimizer = AdamW(param_groups)
+
+    # ----- Scheduler (linear warmup) -----
+    total_steps  = len(train_loader) * EPOCHS
     warmup_steps = int(0.1 * total_steps)
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, 
-        num_warmup_steps=warmup_steps, 
-        num_training_steps=total_steps
+        optimizer,
+        num_warmup_steps=warmup_steps,
+        num_training_steps=total_steps,
     )
-    
-    # Training State
-    best_val_loss = float('inf')
-    patience = 2
+
+    # ----- Training state -----
+    best_macro_f1 = -1.0        # track *Macro F1* now, not loss
     trigger_times = 0
-    
+    best_thresholds = None
+
     for epoch in range(EPOCHS):
+        # ---- Train phase ----
         model.train()
         train_losses = []
-        print(f"\n--- Epoch {epoch+1}/{EPOCHS} ---")
-        
-        loop = tqdm(train_loader, leave=True)
+        print(f"\n{'='*60}")
+        print(f"  EPOCH {epoch+1} / {EPOCHS}")
+        print(f"{'='*60}")
+
+        loop = tqdm(train_loader, leave=True, desc="Training")
         for batch in loop:
             optimizer.zero_grad()
-            
-            input_ids = batch['input_ids'].to(DEVICE)
+
+            input_ids      = batch['input_ids'].to(DEVICE)
             attention_mask = batch['attention_mask'].to(DEVICE)
-            labels = batch['labels'].to(DEVICE)
-            
+            labels         = batch['labels'].to(DEVICE)
+
             logits = model(input_ids, attention_mask)
-            loss = criterion(logits, labels)
-            
+            loss   = criterion(logits, labels)
+
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
-            
+
             train_losses.append(loss.item())
-            loop.set_description(f"Train Loss: {np.mean(train_losses):.4f}")
-            
-        # Evaluation
-        val_metrics = evaluate(model, val_loader, DEVICE, criterion)
-        print(f"Validation Results:")
+            loop.set_postfix(loss=f"{np.mean(train_losses[-50:]):.4f}")
+
+        avg_train_loss = np.mean(train_losses)
+        print(f"\n  Avg Train Loss: {avg_train_loss:.4f}")
+
+        # ---- Validation phase (with dynamic threshold search) ----
+        print("\n  --- Validation ---")
+        val_metrics, val_thresholds = evaluate(
+            model, val_loader, DEVICE, criterion, thresholds=None
+        )
+
+        print(f"\n  Validation Results:")
         for k, v in val_metrics.items():
-            print(f"  {k}: {v:.4f}")
-            
-        # Early Stopping
-        if val_metrics['loss'] < best_val_loss:
-            best_val_loss = val_metrics['loss']
+            print(f"    {k:18s}: {v:.4f}")
+
+        # ---- Early stopping on Macro F1 (not loss!) ----
+        current_macro_f1 = val_metrics['macro_f1']
+        if current_macro_f1 > best_macro_f1:
+            best_macro_f1 = current_macro_f1
+            best_thresholds = val_thresholds
             trigger_times = 0
-            torch.save(model.state_dict(), 'best_roberta_model.pt')
-            print("  Model saved!")
+            torch.save(model.state_dict(), 'best_roberta_emotions.pt')
+            np.save('best_thresholds.npy', best_thresholds)
+            print(f"  ✓ New best Macro F1: {best_macro_f1:.4f}  — model saved!")
         else:
             trigger_times += 1
-            if trigger_times >= patience:
-                print("Early stopping triggered.")
+            print(f"  ✗ No improvement ({trigger_times}/{PATIENCE})")
+            if trigger_times >= PATIENCE:
+                print("\n  ⚠ Early stopping triggered.")
                 break
 
+    # ----- Final summary -----
+    print(f"\n{'='*60}")
+    print(f"  Training complete.  Best Macro F1: {best_macro_f1:.4f}")
+    print(f"  Saved: best_roberta_emotions.pt  +  best_thresholds.npy")
+    print(f"{'='*60}")
+
+
+# ============================================================================
 if __name__ == "__main__":
-    # Ensure Resources directory exists or paths are correct before running
-    # os.makedirs('Resources', exist_ok=True) 
     train()
