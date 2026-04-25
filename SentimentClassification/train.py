@@ -44,24 +44,29 @@ def main(hparams) -> None:
     # ------------------------
     # 3. INIT CALLBACKS
     # ------------------------
+    # EarlyStopping: halt when the emotion Jaccard score stops improving.
+    # Using val_acc_aux (epoch-level macro Jaccard over all 13 emotions) in
+    # 'max' mode means we keep training as long as the model keeps getting
+    # better at predicting emotions, and stop when it plateaus.
     early_stop_callback = EarlyStopping(
-        monitor="val_loss",
+        monitor=hparams.monitor,
         patience=hparams.patience,
         verbose=True,
-        mode="min",
+        mode=hparams.metric_mode,
     )
 
-    # Checkpoint: Save best model version
-    # Note: versioning is handled automatically by tb_logger
+    # Checkpoint: Save the epoch with the HIGHEST emotion Jaccard score.
+    # This ensures .test() loads the model that was best at emotion prediction,
+    # not just the one that happened to have the lowest MSE.
     ckpt_path = os.path.join(tb_logger.log_dir, "checkpoints")
     checkpoint_callback = ModelCheckpoint(
-        dirpath=ckpt_path,  # FIX: Changed 'filepath' to 'dirpath'
-        filename='{epoch}-{val_loss:.2f}',  # Optional: adds info to the filename
+        dirpath=ckpt_path,
+        filename='epoch={epoch}-val_acc_aux={val_acc_aux:.4f}',
         save_top_k=hparams.save_top_k,
         verbose=True,
         monitor=hparams.monitor,
-        # period=1,               # Note: 'period' is now 'every_n_epochs' in newer versions
         mode=hparams.metric_mode,
+        auto_insert_metric_name=False,  # filename template above already includes it
     )
 
     model.hparams.checkpoint_path = tb_logger.log_dir
@@ -112,8 +117,11 @@ if __name__ == "__main__":
     parser.add_argument("--max_epochs", default=10, type=int)
 
     # Monitoring Settings
-    parser.add_argument("--monitor", default="val_loss", type=str)
-    parser.add_argument("--metric_mode", default="min", type=str)
+    # val_acc_aux = epoch-level macro Jaccard over all 13 emotions (maximize).
+    # Switch to 'val_pearson' / 'max' if the primary goal shifts to the
+    # main regression task, or 'val_loss' / 'min' for generic MSE monitoring.
+    parser.add_argument("--monitor", default="val_acc_aux", type=str)
+    parser.add_argument("--metric_mode", default="max", type=str)
 
     # Model Selection
     parser.opt_list(

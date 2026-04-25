@@ -16,7 +16,7 @@ from torch import optim
 from torch.utils.data import DataLoader, RandomSampler
 from transformers import get_linear_schedule_with_warmup
 
-from dataloader import sentiment_analysis_dataset, MyCollator
+from dataloader import sentiment_analysis_dataset, MyCollator, EMOTION_COLS
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -126,10 +126,15 @@ class BERTRegressor(pl.LightningModule):
                 requires_grad=True)
             self.alpha = 0.5
         elif aux_task_str == 'emotions':
-            # we have 13 emotions
-            self.model = RedditTransformer(self.hparams.encoder_model, 1, self.hparams.extra_dropout, 13)
+            # Build model with only the learnable emotion classes (defined in EMOTION_COLS)
+            self.model = RedditTransformer(self.hparams.encoder_model, 1, self.hparams.extra_dropout, len(EMOTION_COLS))
+            # For best emotion prediction, give the AUX task the larger initial weight.
+            # weights[0] = main task (usVSthem regression)  = 1 - loss_aux_dropout
+            # weights[1] = aux  task (emotion Jaccard)      = 1 + loss_aux_dropout
+            # With loss_aux_dropout=0.25 → main=0.75, aux=1.25
+            # With loss_aux_dropout=0.85 → main=0.15, aux=1.85 (heavy emotion focus)
             self.weights = nn.Parameter(
-                torch.Tensor([1 + self.hparams.loss_aux_dropout, 1 - self.hparams.loss_aux_dropout]),
+                torch.Tensor([1 - self.hparams.loss_aux_dropout, 1 + self.hparams.loss_aux_dropout]),
                 requires_grad=True)
             self.alpha = 0.5
         else:
@@ -141,7 +146,22 @@ class BERTRegressor(pl.LightningModule):
         self._loss = nn.MSELoss()
 
         if self.hparams.aux_task == 'emotions':
-            self._loss_aux = nn.BCEWithLogitsLoss()  # FIX: was self.loss_aux — missing _ prefix
+            # Compute class-balanced pos_weight from training data.
+            # pos_weight[i] = neg_count[i] / pos_count[i]
+            # This forces the model to put proportionally MORE penalty on
+            # missing rare emotions (e.g., Relief: 20 samples → weight≈183)
+            # vs common ones (e.g., Contempt: 1396 samples → weight≈1.6).
+            # Without this, the model learns to predict 0 for rare classes
+            # because that's the safest path to a low average BCE loss.
+            train_df   = pd.read_csv(self.hparams.train_csv)
+            pos_counts = train_df[EMOTION_COLS].sum().values.astype(float)   # (N_emotions,)
+            neg_counts = (len(train_df) - pos_counts).astype(float)
+            # Clamp min to 1 to avoid div-by-zero for any class with 0 positives
+            pos_weight = torch.tensor(
+                neg_counts / np.maximum(pos_counts, 1.0), dtype=torch.float32
+            )
+            log.info(f"BCEWithLogitsLoss pos_weight: {pos_weight.tolist()}")
+            self._loss_aux = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
         else:
             self._loss_aux = nn.CrossEntropyLoss()  # FIX: was self.loss_aux — missing _ prefix
 
@@ -208,7 +228,7 @@ class BERTRegressor(pl.LightningModule):
             norms = torch.stack(norms)
 
             # take the losses at the beginning of the batch processing
-            if self.trainer.global_step == 0:
+            if getattr(self, "initial_loses", None) is None or self.trainer.global_step == 0:
                 self.initial_loses = loss.detach()
 
             with torch.no_grad():
@@ -218,7 +238,7 @@ class BERTRegressor(pl.LightningModule):
                 inverse_train_rates = loss_ratios / loss_ratios.mean()
 
                 # use the average of the means to compute the new target for the force of the task
-                constant_term = norms.mean() * (inverse_train_rates ** self.alpha)
+                constant_term = (norms.mean() * (inverse_train_rates ** self.alpha)).detach()
 
             # Output - Target take its derivative and modify weight main task and auxiliary task
             grad_norm_loss = (norms - constant_term).abs().sum()
@@ -239,54 +259,59 @@ class BERTRegressor(pl.LightningModule):
         # Phase 2: The Multi-Task Safety Net
         if str(getattr(self.hparams, 'aux_task', 'None')) != 'None':
             with torch.no_grad():
+                # Prevent negative weights which invert loss
+                self.weights.data = torch.clamp(self.weights.data, min=1e-4)
                 # Keep the normalization so weights always add up to 2
                 normalize_coeff = len(self.weights) / self.weights.sum()
                 self.weights.data = self.weights.data * normalize_coeff
 
-    def _compute_aux_metrics(
+    def _compute_aux_metrics_categorical(
             self,
             y_aux: torch.Tensor,
             y_aux_hat: torch.Tensor,
             device: torch.device,
-            dataset_columns=None,  # FIX: added parameter so caller can pass the right dataset columns
-            # (val uses _dev_dataset, test uses _test_dataset)
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Shared aux metric logic for val/test steps. Stays on-device where possible."""
-        aux_task_str = str(self.hparams.aux_task)
-
-        if aux_task_str not in ("None", "emotions"):
-            label_hat_aux = torch.argmax(y_aux_hat, dim=1)
-            acc = (y_aux == label_hat_aux).float().mean()
-
-            # sklearn needs CPU — unavoidable, but isolated here
-            cm = confusion_matrix(
-                self.hparams.le_aux.inverse_transform(y_aux.long().cpu().numpy()),
-                self.hparams.le_aux.inverse_transform(label_hat_aux.cpu().numpy()),
-                labels=self.hparams.le_aux.classes_,
-            )
-
-        elif self.hparams.aux_task == "emotions":
-            labels_hat = (torch.sigmoid(y_aux_hat) > 0.5)
-            # jaccard_score requires CPU — unavoidable
-            acc = jaccard_score(y_aux.cpu().numpy(), labels_hat.cpu().numpy(), average="macro")
-            acc = float(acc)
-
-            # FIX: was hardcoded to self._dev_dataset.columns — now uses the passed-in columns
-            # so test_step can correctly pass self._test_dataset.columns
-            cm = confusion_matrix(
-                y_aux.cpu().numpy().argmax(axis=1),
-                labels_hat.cpu().numpy().argmax(axis=1),
-                labels=np.arange(len(dataset_columns)),
-            )
-
-        else:
-            return (
-                torch.zeros(1, device=device),
-                torch.zeros(1, 1, device=device),
-            )
-
+        """Per-batch aux accuracy for non-emotions categorical aux tasks."""
+        label_hat_aux = torch.argmax(y_aux_hat, dim=1)
+        acc = (y_aux == label_hat_aux).float().mean()
+        cm = confusion_matrix(
+            self.hparams.le_aux.inverse_transform(y_aux.long().cpu().numpy()),
+            self.hparams.le_aux.inverse_transform(label_hat_aux.cpu().numpy()),
+            labels=self.hparams.le_aux.classes_,
+        )
         return (
-            torch.tensor(acc, device=device),
+            torch.tensor(float(acc), device=device),
+            torch.tensor(cm, device=device),
+        )
+
+    def _compute_jaccard_epoch(
+            self,
+            all_labels_aux: torch.Tensor,   # (N, 13) float, values 0 or 1
+            all_logits_aux: torch.Tensor,   # (N, 13) raw logits
+            dataset_columns,
+            device: torch.device,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute Jaccard and confusion matrix over the FULL epoch for emotions.
+        Must be called once at epoch-end after concatenating all batches.
+        Per-batch Jaccard is wrong: sparse batches make sklearn set per-class
+        score to 0.0 for labels with no true/predicted samples, collapsing
+        the macro average to near-zero even for a well-trained model.
+        """
+        labels_hat = (torch.sigmoid(all_logits_aux) > 0.5)  # (N, 13) bool
+        y_np   = all_labels_aux.cpu().numpy().astype(int)   # (N, 13)
+        hat_np = labels_hat.cpu().numpy().astype(int)       # (N, 13)
+
+        # zero_division=0 suppresses the warning; classes absent from the
+        # entire split are correctly scored as 0 (rare but valid).
+        acc = jaccard_score(y_np, hat_np, average="macro", zero_division=0)
+
+        cm = confusion_matrix(
+            y_np.argmax(axis=1),
+            hat_np.argmax(axis=1),
+            labels=np.arange(len(dataset_columns)),
+        )
+        return (
+            torch.tensor(float(acc), device=device),
             torch.tensor(cm, device=device),
         )
 
@@ -295,28 +320,43 @@ class BERTRegressor(pl.LightningModule):
         model_out = self.forward(inputs)
         loss_val = self.loss(model_out, targets)
 
-        y = targets["labels"]
+        y     = targets["labels"]
         y_hat = model_out["logits"]
+        device = loss_val[0].device
 
-        if str(self.hparams.aux_task) != "None":
-            val_acc_aux, conf_matrix_aux = self._compute_aux_metrics(
+        aux_task_str = str(self.hparams.aux_task)
+        if aux_task_str == "emotions":
+            # Store raw tensors — Jaccard will be computed over the FULL epoch
+            output = {
+                "val_loss":       loss_val[0],
+                "labels":         y,
+                "predictions":    y_hat,
+                "labels_aux":     targets["labels_aux"],    # (B, 13) float
+                "logits_aux":     model_out["logits_aux"],  # (B, 13) raw
+            }
+        elif aux_task_str != "None":
+            # Categorical aux: per-batch accuracy is fine
+            val_acc_aux, conf_matrix_aux = self._compute_aux_metrics_categorical(
                 targets["labels_aux"],
                 model_out["logits_aux"],
-                device=loss_val[0].device,  # FIX: was loss_val.device — loss() returns a tuple, not a tensor
-                dataset_columns=self._dev_dataset.columns,  # FIX: pass correct columns for val
+                device=device,
             )
+            output = {
+                "val_loss":        loss_val[0],
+                "labels":          y,
+                "predictions":     y_hat,
+                "conf_matrix_aux": conf_matrix_aux,
+                "val_acc_aux":     val_acc_aux,
+            }
         else:
-            val_acc_aux = torch.zeros(1, device=loss_val[0].device)  # FIX: same tuple indexing fix
-            conf_matrix_aux = torch.zeros(1, 1, device=loss_val[0].device)
+            output = {
+                "val_loss":        loss_val[0],
+                "labels":          y,
+                "predictions":     y_hat,
+                "conf_matrix_aux": torch.zeros(1, 1, device=device),
+                "val_acc_aux":     torch.zeros(1, device=device),
+            }
 
-        output = {
-            "val_loss": loss_val[0],  # FIX: unpack the tensor from the tuple for downstream stacking
-            "labels": y,
-            "predictions": y_hat,
-            "conf_matrix_aux": conf_matrix_aux,
-            "val_acc_aux": val_acc_aux,
-        }
-        # PL 2.0 FIX: Store step output
         self.validation_step_outputs.append(output)
         return output
 
@@ -352,28 +392,42 @@ class BERTRegressor(pl.LightningModule):
         model_out = self.forward(inputs)
         loss_val = self.loss(model_out, targets)
 
-        y = targets["labels"]
+        y     = targets["labels"]
         y_hat = model_out["logits"]
+        device = loss_val[0].device
 
-        if str(self.hparams.aux_task) != "None":
-            val_acc_aux, conf_matrix_aux = self._compute_aux_metrics(
+        aux_task_str = str(self.hparams.aux_task)
+        if aux_task_str == "emotions":
+            # Store raw tensors — Jaccard computed over full epoch
+            output = {
+                "val_loss":    loss_val[0],
+                "labels":      y,
+                "predictions": y_hat,
+                "labels_aux":  targets["labels_aux"],
+                "logits_aux":  model_out["logits_aux"],
+            }
+        elif aux_task_str != "None":
+            val_acc_aux, conf_matrix_aux = self._compute_aux_metrics_categorical(
                 targets["labels_aux"],
                 model_out["logits_aux"],
-                device=loss_val[0].device,  # FIX: was loss_val.device — loss() returns a tuple
-                dataset_columns=self._test_dataset.columns,  # FIX: test uses _test_dataset not _dev_dataset
+                device=device,
             )
+            output = {
+                "val_loss":        loss_val[0],
+                "labels":          y,
+                "predictions":     y_hat,
+                "conf_matrix_aux": conf_matrix_aux,
+                "val_acc_aux":     val_acc_aux,
+            }
         else:
-            val_acc_aux = torch.zeros(1, device=loss_val[0].device)
-            conf_matrix_aux = torch.zeros(1, 1, device=loss_val[0].device)
+            output = {
+                "val_loss":        loss_val[0],
+                "labels":          y,
+                "predictions":     y_hat,
+                "conf_matrix_aux": torch.zeros(1, 1, device=device),
+                "val_acc_aux":     torch.zeros(1, device=device),
+            }
 
-        output = {
-            "val_loss": loss_val[0],  # FIX: unpack tensor from tuple
-            "labels": y,
-            "predictions": y_hat,
-            "conf_matrix_aux": conf_matrix_aux,
-            "val_acc_aux": val_acc_aux,
-        }
-        # PL 2.0 FIX: Store step output
         self.test_step_outputs.append(output)
         return output
 
@@ -401,77 +455,16 @@ class BERTRegressor(pl.LightningModule):
         Modern Lightning (>=1.6) handles device/DDP reduction automatically.
         """
         outputs = self.validation_step_outputs
+        aux_task_str = str(self.hparams.aux_task)
 
-        # --- Accumulate losses and aux accuracy ---
+        # --- Loss ---
         val_loss_mean = torch.stack([o["val_loss"] for o in outputs]).mean()
-        val_acc_aux_mean = torch.stack([o["val_acc_aux"] for o in outputs]).mean()
 
-        # --- Concatenate predictions and labels (stay on device) ---
-        val_y = torch.cat([o["labels"] for o in outputs])  # (N,)
+        # --- Main task: concatenate predictions and labels ---
+        val_y     = torch.cat([o["labels"]      for o in outputs])  # (N,)
         val_y_hat = torch.cat([o["predictions"] for o in outputs])  # (N,)
 
-        # --- Sum confusion matrices ---
-        conf_matrix_aux = torch.stack([o["conf_matrix_aux"] for o in outputs]).sum(dim=0)
-
-        # --- Pearson correlation (torch-native, no numpy, no cpu move) ---
-        def _pearson(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-            x = x.float().flatten()
-            y = y.float().flatten()
-            x_mean = x - x.mean()
-            y_mean = y - y.mean()
-            return (x_mean * y_mean).sum() / (
-                    x_mean.norm() * y_mean.norm() + 1e-8
-            )
-
-        pearsonr = _pearson(val_y, val_y_hat)
-
-        # --- Log metrics (Lightning handles DDP syncing automatically) ---
-        self.log("val_loss", val_loss_mean, prog_bar=True, sync_dist=True)
-        self.log("val_pearson", pearsonr, prog_bar=True, sync_dist=True)
-        self.log("val_acc_aux", val_acc_aux_mean, prog_bar=True, sync_dist=True)
-
-        # --- Confusion matrix figures (only on rank 0 to avoid duplicates) ---
-        if self.trainer.is_global_zero and str(self.hparams.aux_task) != "None":
-            labels = (
-                self._dev_dataset.columns
-                if self.hparams.aux_task == "emotions"
-                else self.hparams.le_aux.classes_
-            )
-            fig, ax = plt.subplots(figsize=(10, 7))
-            sn.heatmap(conf_matrix_aux.float().cpu(), annot=True, ax=ax)
-            ax.set_xlabel("Predicted labels")
-            ax.set_ylabel("True labels")
-            ax.set_title("Confusion Matrix")
-            ax.xaxis.set_ticklabels(labels)
-            ax.yaxis.set_ticklabels(labels)
-            self.logger.experiment.add_figure("confusion matrix Aux", fig)
-            plt.close(fig)  # close only this figure, not all
-
-        # PL 2.0 FIX: Clear memory
-        self.validation_step_outputs.clear()
-
-    # PL 2.0 FIX: Renamed test_epoch_end to on_test_epoch_end and removed outputs arg
-    def on_test_epoch_end(self) -> None:
-        """Aggregates test step outputs and logs metrics."""
-        outputs = self.test_step_outputs
-
-        # torch.stack creates a 2D tensor from all the scalar losses,
-        # then .mean() reduces it to a single scalar — no manual loop needed
-        val_loss_mean = torch.stack([o["val_loss"] for o in outputs]).mean()
-
-        # torch.cat glues all the per-batch tensors along dim=0,
-        # giving us one big (N,) tensor for the whole test set — stays on device
-        val_y = torch.cat([o["labels"] for o in outputs])
-        val_y_hat = torch.cat([o["predictions"] for o in outputs])
-
-        # Same idea: stack adds a new dim-0, sum(dim=0) collapses it,
-        # leaving one matrix of shape (num_classes, num_classes)
-        conf_matrix_aux = torch.stack([o["conf_matrix_aux"] for o in outputs]).sum(dim=0)
-
-        # Pearson on-device (no .cpu() / numpy needed)
-        # We subtract the mean to center, then use the dot-product formula:
-        #   r = sum((x - x̄)(y - ȳ)) / (||x - x̄|| * ||y - ȳ||)
-        # 1e-8 guards against division by zero on constant predictions
+        # --- Pearson correlation (torch-native) ---
         def _pearson(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
             x = x.float().flatten()
             y = y.float().flatten()
@@ -481,31 +474,36 @@ class BERTRegressor(pl.LightningModule):
 
         pearsonr = _pearson(val_y, val_y_hat)
 
-        # self.log() is the modern Lightning API for metrics:
-        # - prog_bar=True  → shows in the tqdm bar
-        # - sync_dist=True → averages the value across GPUs in DDP automatically
-        #                    (replaces the old manual use_dp / use_ddp2 reduction)
-        self.log("test_loss", val_loss_mean, prog_bar=True, sync_dist=True)
-        self.log("test_pearson", pearsonr, prog_bar=True, sync_dist=True)
+        # --- Aux metrics ---
+        device = val_loss_mean.device
+        if aux_task_str == "emotions":
+            # Jaccard computed over FULL epoch to avoid ill-defined per-batch scores
+            all_labels_aux = torch.cat([o["labels_aux"] for o in outputs])   # (N, 13)
+            all_logits_aux = torch.cat([o["logits_aux"] for o in outputs])   # (N, 13)
+            val_acc_aux, conf_matrix_aux = self._compute_jaccard_epoch(
+                all_labels_aux, all_logits_aux,
+                dataset_columns=self._dev_dataset.columns,
+                device=device,
+            )
+        elif aux_task_str != "None":
+            val_acc_aux    = torch.stack([o["val_acc_aux"]     for o in outputs]).mean()
+            conf_matrix_aux = torch.stack([o["conf_matrix_aux"] for o in outputs]).sum(dim=0)
+        else:
+            val_acc_aux     = torch.zeros(1, device=device)
+            conf_matrix_aux = torch.zeros(1, 1, device=device)
 
-        # Save predictions to CSV — .cpu() here is unavoidable since
-        # csv.writer and numpy cannot read GPU tensors
-        val_labels = val_y.float().cpu().numpy().flatten()
-        val_preds = val_y_hat.float().cpu().numpy().flatten()
-        pred_path = Path(self.hparams.checkpoint_path) / "predictions.csv"
-        with pred_path.open("w", newline="") as f:
-            csv.writer(f).writerows(zip(val_preds, val_labels))
+        # --- Log metrics ---
+        self.log("val_loss",    val_loss_mean, prog_bar=True, sync_dist=True)
+        self.log("val_pearson", pearsonr,      prog_bar=True, sync_dist=True)
+        self.log("val_acc_aux", val_acc_aux,   prog_bar=True, sync_dist=True)
 
-        # is_global_zero ensures only one process logs/plots in multi-GPU runs
-        # Without this, every GPU would write the same figure to the logger
-        if self.trainer.is_global_zero and str(self.hparams.aux_task) != "None":
+        # --- Confusion matrix figure (rank 0 only) ---
+        if self.trainer.is_global_zero and aux_task_str != "None":
             labels = (
-                self._test_dataset.columns
-                if self.hparams.aux_task == "emotions"
+                self._dev_dataset.columns
+                if aux_task_str == "emotions"
                 else self.hparams.le_aux.classes_
             )
-            # .float() keeps the heatmap on CPU-friendly dtype for seaborn;
-            # seaborn can't read CUDA tensors so .cpu() is unavoidable here too
             fig, ax = plt.subplots(figsize=(10, 7))
             sn.heatmap(conf_matrix_aux.float().cpu(), annot=True, ax=ax)
             ax.set_xlabel("Predicted labels")
@@ -514,7 +512,75 @@ class BERTRegressor(pl.LightningModule):
             ax.xaxis.set_ticklabels(labels)
             ax.yaxis.set_ticklabels(labels)
             self.logger.experiment.add_figure("confusion matrix Aux", fig)
-            plt.close(fig)  # close only this figure, not every open matplotlib window
+            plt.close(fig)
+
+        # PL 2.0 FIX: Clear memory
+        self.validation_step_outputs.clear()
+
+    # PL 2.0 FIX: Renamed test_epoch_end to on_test_epoch_end and removed outputs arg
+    def on_test_epoch_end(self) -> None:
+        """Aggregates test step outputs and logs metrics."""
+        outputs = self.test_step_outputs
+        aux_task_str = str(self.hparams.aux_task)
+
+        val_loss_mean = torch.stack([o["val_loss"] for o in outputs]).mean()
+
+        val_y     = torch.cat([o["labels"]      for o in outputs])
+        val_y_hat = torch.cat([o["predictions"] for o in outputs])
+
+        def _pearson(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+            x = x.float().flatten()
+            y = y.float().flatten()
+            x_c = x - x.mean()
+            y_c = y - y.mean()
+            return (x_c * y_c).sum() / (x_c.norm() * y_c.norm() + 1e-8)
+
+        pearsonr = _pearson(val_y, val_y_hat)
+
+        # --- Aux metrics ---
+        device = val_loss_mean.device
+        if aux_task_str == "emotions":
+            # Jaccard over FULL test set
+            all_labels_aux = torch.cat([o["labels_aux"] for o in outputs])
+            all_logits_aux = torch.cat([o["logits_aux"] for o in outputs])
+            val_acc_aux, conf_matrix_aux = self._compute_jaccard_epoch(
+                all_labels_aux, all_logits_aux,
+                dataset_columns=self._test_dataset.columns,
+                device=device,
+            )
+        elif aux_task_str != "None":
+            val_acc_aux     = torch.stack([o["val_acc_aux"]     for o in outputs]).mean()
+            conf_matrix_aux = torch.stack([o["conf_matrix_aux"] for o in outputs]).sum(dim=0)
+        else:
+            val_acc_aux     = torch.zeros(1, device=device)
+            conf_matrix_aux = torch.zeros(1, 1, device=device)
+
+        self.log("test_loss",    val_loss_mean, prog_bar=True, sync_dist=True)
+        self.log("test_pearson", pearsonr,      prog_bar=True, sync_dist=True)
+        self.log("test_acc_aux", val_acc_aux,   prog_bar=True, sync_dist=True)
+
+        # Save predictions to CSV
+        val_labels = val_y.float().cpu().numpy().flatten()
+        val_preds  = val_y_hat.float().cpu().numpy().flatten()
+        pred_path  = Path(self.hparams.checkpoint_path) / "predictions.csv"
+        with pred_path.open("w", newline="") as f:
+            csv.writer(f).writerows(zip(val_preds, val_labels))
+
+        if self.trainer.is_global_zero and aux_task_str != "None":
+            labels = (
+                self._test_dataset.columns
+                if aux_task_str == "emotions"
+                else self.hparams.le_aux.classes_
+            )
+            fig, ax = plt.subplots(figsize=(10, 7))
+            sn.heatmap(conf_matrix_aux.float().cpu(), annot=True, ax=ax)
+            ax.set_xlabel("Predicted labels")
+            ax.set_ylabel("True labels")
+            ax.set_title("Confusion Matrix")
+            ax.xaxis.set_ticklabels(labels)
+            ax.yaxis.set_ticklabels(labels)
+            self.logger.experiment.add_figure("confusion matrix Aux", fig)
+            plt.close(fig)
 
         # PL 2.0 FIX: Clear memory
         self.test_step_outputs.clear()
@@ -530,7 +596,12 @@ class BERTRegressor(pl.LightningModule):
                 {"params": self.weights, "lr": 1e-2},
             ]
         elif self.hparams.aux_task == "emotions":
-            aux_keywords = {"classification_head_aux", "dense_emotions", "layer_emotion"}
+            # Match the ACTUAL parameter names in RedditTransformer:
+            #   BertEncoder  → self.layer_aux  (the split 12th transformer block)
+            #   BertPooler   → self.dense_aux  (the split CLS pooler head)
+            #   BertRegressor → self.classification_head_aux (the output MLP)
+            # Bug was: "dense_emotions" and "layer_emotion" — those names don't exist!
+            aux_keywords = {"classification_head_aux", "dense_aux", "layer_aux"}
             params, aux_params = [], []
             for name, param in self.model.named_parameters():
                 if any(kw in name for kw in aux_keywords):
@@ -538,9 +609,11 @@ class BERTRegressor(pl.LightningModule):
                 else:
                     params.append(param)
             param_groups = [
-                # FIX: Changed learning_rate to encoder_learning_rate
-                {"params": params, "lr": self.hparams.encoder_learning_rate},
-                {"params": aux_params, "lr": self.hparams.encoder_learning_rate * 10},
+                {"params": params,     "lr": self.hparams.encoder_learning_rate},
+                # Reduced from 10x → 3x: the emotion head still learns faster than
+                # the shared BERT backbone, but 10x was causing rapid memorization
+                # of the small training set (3,683 examples) and severe overfitting.
+                {"params": aux_params, "lr": self.hparams.encoder_learning_rate * 3},
             ]
         else:
             param_groups = [

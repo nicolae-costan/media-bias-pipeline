@@ -87,8 +87,9 @@ class RedditTransformer(torch.nn.Module):
             return_dict=False,
         )
 
-        # 4. Pool
-        pooled_output = bert.pooler(encoder_outputs[0])
+        # 4. Pool — pass the original 2-D attention_mask so BertPooler can
+        #    compute masked mean pooling over real (non-padding) tokens only.
+        pooled_output = bert.pooler(encoder_outputs[0], attention_mask)
 
         # encoder_outputs[0] = hidden states tuple (main, aux)  [from BertEncoder]
         # pooled_output       = pooled tuple (main, aux)        [from BertPooler]
@@ -225,15 +226,36 @@ class BertPooler(torch.nn.Module):
         # Split the dense layer for the two tasks
         self.dense_main = copy.deepcopy(dense)
         self.dense_aux  = copy.deepcopy(dense)
-        self.activation = torch.nn.Tanh()
+        # GELU replaces Tanh:
+        #   - Tanh was designed for BERT's NSP pre-training (binary task)
+        #   - GELU doesn't saturate at strong activations, letting the full
+        #     dynamic range of emotion features flow to the classification head
+        self.activation = torch.nn.GELU()
 
-    def forward(self, hidden_states):
-        # hidden_states is (hidden_states_main, hidden_states_aux)
-        # each of shape [B, S, H] — grab the [CLS] token (position 0)
-        first_token_tensor_main = hidden_states[0][:, 0]
-        first_token_tensor_aux  = hidden_states[1][:, 0]
+    def forward(self, hidden_states, attention_mask=None):
+        """Mean-pool over non-padding tokens instead of using just the [CLS] token.
 
-        pooled_output_main = self.activation(self.dense_main(first_token_tensor_main))
-        pooled_output_aux  = self.activation(self.dense_aux(first_token_tensor_aux))
+        [CLS] is pre-trained for NSP, not emotion detection. The emotion signal
+        is often a single word anywhere in the sentence ('devastated', 'furious').
+        Mean pooling captures those signals regardless of their position.
+
+        Args:
+            hidden_states: tuple (main [B,S,H], aux [B,S,H]) from BertEncoder
+            attention_mask: original 2-D mask [B, S], values 0 (pad) / 1 (real)
+        """
+        hs_main, hs_aux = hidden_states  # each [B, S, H]
+
+        if attention_mask is not None:
+            # Expand mask to [B, S, 1] so it broadcasts against [B, S, H]
+            mask = attention_mask.unsqueeze(-1).float()          # [B, S, 1]
+            pooled_main = (hs_main * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+            pooled_aux  = (hs_aux  * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1e-9)
+        else:
+            # Fallback: unmasked mean (all tokens equally, including padding)
+            pooled_main = hs_main.mean(dim=1)
+            pooled_aux  = hs_aux.mean(dim=1)
+
+        pooled_output_main = self.activation(self.dense_main(pooled_main))
+        pooled_output_aux  = self.activation(self.dense_aux(pooled_aux))
 
         return (pooled_output_main, pooled_output_aux)

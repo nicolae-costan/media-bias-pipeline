@@ -9,6 +9,19 @@ import re, pickle, torch
 from tqdm import tqdm
 from torch.nn.utils.rnn import pad_sequence
 
+# Emotions with enough training samples to learn generalizable patterns.
+# Removed: Gratitude(33), Happiness(28), Relief(20), Guilt(81), Pride(93), Sadness(72)
+# Kept: all classes with ≥177 positive training examples.
+EMOTION_COLS = [
+    'Anger',         # 931  (25.3%)
+    'Contempt',      # 1396 (37.9%)
+    'Disgust',       # 946  (25.7%)
+    'Fear',          # 612  (16.6%)
+    'Hope',          # 177  ( 4.8%)
+    'Sympathy',      # 616  (16.7%)
+    'Emotions_Neutral',  # 1120 (30.4%)
+]
+
 class RedditDataset(Dataset):
     """Face Landmarks dataset."""
 
@@ -25,9 +38,11 @@ class RedditDataset(Dataset):
         if aux_task_str == 'None':
             self.comments['label_aux'] = 0
         elif aux_task_str == 'emotions':
-            # concatanate into a single vector
-            self.comments['label_aux'] = self.comments[['Anger','Contempt','Disgust','Fear','Gratitude','Guilt','Happiness','Hope','Pride','Relief','Sadness','Sympathy','Emotions_Neutral']].values.tolist()
-            self.columns = list(self.comments[['Anger','Contempt','Disgust','Fear','Gratitude','Guilt','Happiness','Hope','Pride','Relief','Sadness','Sympathy','Emotions_Neutral']].columns)
+            # Use only EMOTION_COLS (7 learnable classes).
+            # Rare classes like Relief(20), Happiness(28) are excluded;
+            # they have too few examples for BERT to learn generalizable patterns.
+            self.comments['label_aux'] = self.comments[EMOTION_COLS].values.tolist()
+            self.columns = EMOTION_COLS
         else:
             # ONLY transform, don't re-fit! Fitting should happen in the model's __init__
             # on the full dataset to ensure consistent label indexing across splits.
