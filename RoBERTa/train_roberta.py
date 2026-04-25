@@ -4,7 +4,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import RobertaTokenizer, RobertaModel, AdamW, get_linear_schedule_with_warmup
+from transformers import RobertaTokenizer, RobertaModel, get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from sklearn.metrics import f1_score, hamming_loss, jaccard_score
 from tqdm import tqdm
 
