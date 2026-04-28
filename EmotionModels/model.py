@@ -233,6 +233,19 @@ class EmotionModel(pl.LightningModule):
             zero_division=0,
         )
 
+        per_class_jaccard = jaccard_score(
+            all_targets_np,
+            all_preds_np,
+            average=None,
+            zero_division=0
+        )
+
+        # 2. Log each label individually
+        for i, score in enumerate(per_class_jaccard):
+            # Using a prefix like 'val_class_jaccard/' groups them in TensorBoard/WandB
+            self.log(f"val_class_jaccard/{i}", score, sync_dist=True)
+
+
         self.log("val_loss", avg_loss, prog_bar=True, sync_dist=True)
         self.log("val_jaccard", global_jaccard, prog_bar=True, sync_dist=True)
 
