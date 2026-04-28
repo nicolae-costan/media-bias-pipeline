@@ -38,6 +38,29 @@ class FocalLoss(nn.Module):
 
         self.gamma = gamma
         self.reduction = reduction
+        if pos_weight is not None:
+            self.register_buffer('pos_weight', pos_weight)
+        else:
+            self.pos_weight = None
+
+    def forward(self,logits:torch.Tensor,targets:torch.Tensor):
+
+
+        bce = nn.functional.binary_cross_entropy_with_logits(
+            logits,targets,pos_weight=self.pos_weight,reduction='none'
+        )
+        probs = torch.sigmoid(logits)
+        p_t = probs * targets + (1.0 - probs) * (1.0 - targets)
+
+        focal_weight = (1.0-p_t)**self.gamma
+        loss = focal_weight * bce
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:  # 'none'
+            return loss
 
 
 def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
@@ -46,7 +69,7 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
 
     for path in csv_paths:
         if os.path.exists(path):
-            dfs.append(pd.read_csf(path))
+            dfs.append(pd.read_csv(path))
 
     if not dfs:
         log.warning("No csv found")
@@ -82,8 +105,6 @@ class EmotionModel(pl.LightningModule):
             hparams_dict = dict(hparams)
 
         clean_hparams = {
-            k: v for k, v in hparams_dict.items()
-            if isinstance(v, (int, float, str, bool, type(None)))
             k: v for k, v in hparams_dict.items()
             if isinstance(v, (int, float, str, bool, type(None)))
         }
@@ -148,13 +169,9 @@ class EmotionModel(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         self.training_step_outputs.append({"loss": loss})
         return loss
-        self.training_step_outputs.append({"loss": loss})
-        return loss
 
     def validation_step(self, batch, batch_nb):
-    def validation_step(self, batch, batch_nb):
         inputs, targets = batch
-        input_ids, attention_mask = self._safe_squeeze(inputs)
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
         logits_28 = self.forward(input_ids, attention_mask)
