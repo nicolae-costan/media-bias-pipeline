@@ -1,3 +1,4 @@
+import math
 import os
 import torch
 import torch.nn as nn
@@ -30,11 +31,11 @@ class FocalLoss(nn.Module):
     def __init__(
             self,
             gamma:float = 2.0,
-            pos_weight: torch.tensor | None = None,
+            pos_weight: torch.Tensor | None = None,
             reduction: str = "mean"
     ):
         
-        super.__init__()
+        super().__init__()
 
         self.gamma = gamma
         self.reduction = reduction
@@ -77,24 +78,37 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
     
 
     df_all = pd.concat(dfs,ignore_index=True)
-    exclude_cols = {'body', 'usVSthem_scale', 'is_Disc_Crit', 'group', 'bias', 'allsides_name', 'Unnamed: 0'}
-    label_cols = [c for c in df_all.columns if c not in exclude_cols]
-
+    label_cols = [
+        'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude',
+        'Guilt', 'Happiness', 'Hope', 'Pride', 'Relief',
+        'Sadness', 'Sympathy', 'Emotions_Neutral'
+    ]
     total = len(df_all)
     weights = []
 
     for col in label_cols:
-        # Convert to numeric (handles boolean True/False or 1/0 appropriately)
         c = pd.to_numeric(df_all[col], errors='coerce').sum()
+        neg = total - c
         if pd.isna(c) or c == 0:
-            weights.append(10.0)  # Conservative default for extremely rare/missing
+            # Label never appears — conservative default so there is still a
+            # gradient signal if it shows up at inference time
+            weights.append(10.0)
+        elif neg == 0:
+            weights.append(clamp_max)
         else:
-            weights.append((total - c) / c)
+            # log(1 + neg/pos) instead of raw neg/pos:
+            #   - still up-weights rare labels (higher ratio → higher weight)
+            #   - logarithm compresses the extreme tail so a label that appears
+            #     in 1% of rows gets weight ≈ 4.6 instead of ≈ 99, preventing
+            #     gradient spikes without needing an aggressive hard clamp
+            weights.append(math.log1p(float(neg) / float(c)))
 
     w = torch.tensor(weights, dtype=torch.float)
     return torch.clamp(w, max=clamp_max), total, label_cols
 
 class EmotionModel(pl.LightningModule):
+
+
     def __init__(self, hparams) -> None:
         super(EmotionModel, self).__init__()
 
@@ -126,14 +140,30 @@ class EmotionModel(pl.LightningModule):
             6, 6, 0, 0, 12, 11, 12, 12, 7, 10, 1, 2, 5, 6, 3, 4,
             10, 6, 6, 3, 7, 8, 12, 9, 5, 10, 12, 12
         ], dtype=torch.long))
-        # FIX: register_buffer ensures `self.mapping` is automatically moved to the
         # correct device alongside the model — no manual .to(device) calls needed.
 
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        pos_weight_13, _, _ = compute_weights_from_csv(
+            [self.hparams.train_csv, self.hparams.dev_csv],
+            clamp_max=getattr(self.hparams, 'focal_weight_clamp', 20.0),
+        )
+        _expand = torch.tensor([
+            6, 6, 0, 0, 12, 11, 12, 12, 7, 10, 1, 2, 5, 6, 3, 4,
+            10, 6, 6, 3, 7, 8, 12, 9, 5, 10, 12, 12
+        ], dtype=torch.long)
+        pos_weight_28 = pos_weight_13[_expand]  # shape [28]
 
-    # FIX: Removed setup() and on_train_start() overrides that manually called
-    # module.train() on every submodule. Lightning already manages train/eval mode
-    # correctly; overriding it can break BatchNorm and Dropout behaviour.
+        self.loss_fn = FocalLoss(
+            gamma=getattr(self.hparams, 'focal_gamma', 2.0),
+            pos_weight=pos_weight_28,
+            reduction='mean',
+        )
+
+    def setup(self, stage: str = None):
+        if stage == 'fit':
+            self.model.train()
+
+    def on_train_epoch_start(self):
+        self.model.train()
 
     def _safe_squeeze(self, inputs):
         """
@@ -310,10 +340,13 @@ class EmotionModel(pl.LightningModule):
         parser.add_argument("--encoder_learning_rate", default=2e-5, type=float)
         parser.add_argument("--warmup_proportion", default=0.1, type=float)
         parser.add_argument("--max_length", default=128, type=int)
-        # FIX: Changed default from 0 to 4. Use 0 only on Windows where
-        # multiprocessing with CUDA can cause issues.
-        parser.add_argument("--loader_workers", default=4, type=int)
+        parser.add_argument("--loader_workers", default=0, type=int)
         parser.add_argument("--train_csv", default="Resources/UsVsThem_train_public.csv", type=str)
         parser.add_argument("--dev_csv", default="Resources/UsVsThem_valid_public.csv", type=str)
         parser.add_argument("--test_csv", default="Resources/UsVsThem_test_public.csv", type=str)
+        # Focal Loss hyperparameters
+        parser.add_argument("--focal_gamma", default=2.0, type=float,
+                            help="Focusing parameter for FocalLoss. 0 = standard BCE.")
+        parser.add_argument("--focal_weight_clamp", default=20.0, type=float,
+                            help="Max value for per-label pos_weight to avoid extreme gradients.")
         return parser
