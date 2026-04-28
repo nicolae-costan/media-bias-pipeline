@@ -68,7 +68,79 @@ class EmotionModel(nn.Module):
 
         mapping = self.mapping.to(targets_13.device)
 
+        targets_28 = targets_13[:,mapping]
+        loss = self.loss_fn(logits_28,targets_28)
+        return loss,targets_28
 
+    def _compute_metrics(self, logits_28, targets_28, device):
+        """ Calculates Macro Jaccard Score for multi-label classification """
+        preds_28 = (logits_28 > 0).float()
+
+        # sklearn requires CPU numpy arrays
+        acc = jaccard_score(
+            targets_28.cpu().numpy(),
+            preds_28.cpu().numpy(),
+            average="macro",
+            zero_division=0
+        )
+        return torch.tensor(acc, device=device)
+    def training_step(self,batch:tuple,batch_nb:int):
+
+        inputs,targets = batch
+
+        input_ids = inputs['input_ids']
+        attention_mask = inputs['attention_mask']
+
+        # If shape is [batch_size, 1, seq_len], make it [batch_size, seq_len]
+        if input_ids.dim() == 3 and input_ids.size(1) == 1:
+            input_ids = input_ids.squeeze(1)
+
+        if attention_mask.dim() == 3 and attention_mask.size(1) == 1:
+            attention_mask = attention_mask.squeeze(1)
+
+        targets_13 = targets['labels_aux']
+        logits_28 = self.forward(input_ids,attention_mask)
+        loss,_ = self.calculate_los(logits_28,targets_13)
+
+        self.log("train_loss", loss, prog_bar=True, sync_dist=True)
+
+        output = {"loss": loss}
+        self.training_step_outputs.append(output)
+        return output
+
+    def validation_step(self, batch: tuple, batch_nb: int) -> dict:
+        inputs, targets = batch
+
+        input_ids = inputs['input_ids'].squeeze(1)
+        attention_mask = inputs['attention_mask'].squeeze(1)
+        targets_13 = targets['labels_aux']
+
+        logits_28 = self.forward(input_ids, attention_mask)
+        loss, targets_28 = self.calculate_loss(logits_28, targets_13)
+
+        val_jaccard = self._compute_metrics(logits_28, targets_28, device=loss.device)
+
+        output = {"val_loss": loss, "val_jaccard": val_jaccard}
+        self.validation_step_outputs.append(output)
+        return output
+
+    def test_step(self, batch: tuple, batch_nb: int) -> dict:
+        inputs, targets = batch
+
+        input_ids = inputs['input_ids'].squeeze(1)
+        attention_mask = inputs['attention_mask'].squeeze(1)
+        targets_13 = targets['labels_aux']
+
+        logits_28 = self.forward(input_ids, attention_mask)
+        loss, targets_28 = self.calculate_loss(logits_28, targets_13)
+
+        test_jaccard = self._compute_metrics(logits_28, targets_28, device=loss.device)
+
+        output = {"test_loss": loss, "test_jaccard": test_jaccard}
+        self.test_step_outputs.append(output)
+        return output
+
+        return input_ids, attention_mask
 model_id = "SamLowe/roberta-base-go_emotions"
 
 # Instantiate your model (passing in a dummy value for extra_dropout)
