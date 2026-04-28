@@ -2,12 +2,14 @@
 Runs a model on a single node across N-gpus using TensorBoard for local logging.
 """
 import os
+from pathlib import Path
 
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 from test_tube import HyperOptArgumentParser
 
+# --- THE FIX: Import your new 13-Emotion model ---
 from model import EmotionModel
 
 
@@ -20,11 +22,13 @@ def main(hparams) -> None:
     # ------------------------
     # 1. INIT LIGHTNING MODEL
     # ------------------------
+    # --- THE FIX: Instantiate the new model ---
     model = EmotionModel(hparams)
 
     # ------------------------
     # 2. INIT LOGGER (Local TensorBoard)
     # ------------------------
+    # --- THE FIX: Removed aux_task since we are only predicting emotions now ---
     tb_logger = TensorBoardLogger(
         save_dir="tb_logs",
         name="emotion_classification"
@@ -40,6 +44,7 @@ def main(hparams) -> None:
         mode="min",
     )
 
+    # Checkpoint: Save best model version
     ckpt_path = os.path.join(tb_logger.log_dir, "checkpoints")
     checkpoint_callback = ModelCheckpoint(
         dirpath=ckpt_path,
@@ -50,6 +55,7 @@ def main(hparams) -> None:
         mode=hparams.metric_mode,
     )
 
+    # Lightning handles paths better now, but we'll leave this for compatibility
     if not hasattr(model.hparams, 'checkpoint_path'):
         model.hparams.checkpoint_path = tb_logger.log_dir
 
@@ -59,20 +65,12 @@ def main(hparams) -> None:
     trainer = Trainer(
         logger=tb_logger,
         callbacks=[checkpoint_callback, early_stop_callback],
-
-        # THE FIX: 'gpus' is now split into accelerator and devices
-        accelerator="auto",  # Tells Lightning to use the GPU
-        devices=hparams.gpus,  # Tells it how many to use (e.g., 1)
-
-        # THE FIX: 'dp' (DataParallel) is mostly deprecated;
-        # 'ddp' (DistributedDataParallel) is the modern standard.
+        accelerator="auto",
+        devices=hparams.gpus,
         strategy="ddp" if hparams.gpus > 1 else "auto",
-
         max_epochs=hparams.max_epochs,
         min_epochs=hparams.min_epochs,
         accumulate_grad_batches=hparams.accumulate_grad_batches,
-
-        # THE FIX: 'val_percent_check' was renamed to 'limit_val_batches'
         limit_val_batches=hparams.val_percent_check,
     )
 
@@ -80,7 +78,7 @@ def main(hparams) -> None:
     # 5. START TRAINING
     # ------------------------
     trainer.fit(model)
-    trainer.test(model)
+    trainer.test(model)  # --- THE FIX: Explicitly pass the model to test() ---
 
 
 if __name__ == "__main__":
@@ -97,7 +95,7 @@ if __name__ == "__main__":
     parser.add_argument("--min_epochs", default=1, type=int)
     parser.add_argument("--max_epochs", default=10, type=int)
 
-    # Monitoring Settings
+    # Monitoring Settings (You can also change this to "val_jaccard" and mode to "max" if you want)
     parser.add_argument("--monitor", default="val_loss", type=str)
     parser.add_argument("--metric_mode", default="min", type=str)
 
@@ -110,6 +108,7 @@ if __name__ == "__main__":
     # Search mode
     parser.add_argument("--search_mode", default=False, type=bool)
 
+    # --- THE FIX: Load args from the EmotionRegressor instead of BERTClassifier ---
     parser = EmotionModel.add_model_specific_args(parser)
 
     hparams = parser.parse_args()

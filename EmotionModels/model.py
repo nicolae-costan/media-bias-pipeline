@@ -84,6 +84,8 @@ class EmotionModel(pl.LightningModule):
         clean_hparams = {
             k: v for k, v in hparams_dict.items()
             if isinstance(v, (int, float, str, bool, type(None)))
+            k: v for k, v in hparams_dict.items()
+            if isinstance(v, (int, float, str, bool, type(None)))
         }
         self.save_hyperparameters(clean_hparams)
 
@@ -146,9 +148,13 @@ class EmotionModel(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         self.training_step_outputs.append({"loss": loss})
         return loss
+        self.training_step_outputs.append({"loss": loss})
+        return loss
 
     def validation_step(self, batch, batch_nb):
+    def validation_step(self, batch, batch_nb):
         inputs, targets = batch
+        input_ids, attention_mask = self._safe_squeeze(inputs)
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
         logits_28 = self.forward(input_ids, attention_mask)
