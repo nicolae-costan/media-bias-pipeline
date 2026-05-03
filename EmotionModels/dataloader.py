@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import numpy as np
 import torch
+import os
 from torch.utils.data import Dataset
 from transformers import AutoTokenizer
 
@@ -21,6 +22,12 @@ class RedditDataset(Dataset):
         Args:
             data_csv (string): Path to the csv file with annotations.
         """
+        if not os.path.exists(data_csv):
+            # Try prepending EmotionModels/ if run from project root
+            alt_path = os.path.join("EmotionModels", data_csv)
+            if os.path.exists(alt_path):
+                data_csv = alt_path
+
         self.comments = pd.read_csv(data_csv)
 
         # FIX: Store labels as a numpy float32 array instead of a list-of-lists

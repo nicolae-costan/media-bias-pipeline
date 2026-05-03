@@ -27,7 +27,16 @@ def main(hparams) -> None:
             if file.endswith(".ckpt"):
                 ckpt_full_path = os.path.join(hparams.checkpoint_path, file)
                 print(f"--- Loading model from: {ckpt_full_path} ---")
-                model = EmotionModel.load_from_checkpoint(ckpt_full_path, hparams=hparams)
+                model = EmotionModel.load_from_checkpoint(ckpt_full_path, hparams=hparams, strict=False)
+                
+                # Automatically load optimized thresholds if they exist
+                t_path = os.path.join(os.path.dirname(hparams.checkpoint_path), "thresholds.json")
+                if not os.path.exists(t_path):
+                    # Try the default location in EmotionModels folder
+                    t_path = "EmotionModels/thresholds.json"
+                
+                if os.path.exists(t_path):
+                    model.load_thresholds(t_path)
                 break
 
     if model is None:
