@@ -131,30 +131,23 @@ class EmotionModel(pl.LightningModule):
 
         # Collator and model
         self.prepare_sample = MyCollator(self.hparams.encoder_model, self.hparams.max_length)
-        self.model = AutoModelForSequenceClassification.from_pretrained(self.hparams.encoder_model)
-
-        # Label Expansion Mapping (13 Custom Labels -> 28 GoEmotions Nodes)
-        # Maps indices: Anger(0), Contempt(1), Disgust(2), Fear(3), Gratitude(4), Guilt(5),
-        # Happiness(6), Hope(7), Pride(8), Relief(9), Sadness(10), Sympathy(11), Neutral(12)
-        self.register_buffer('mapping', torch.tensor([
-            6, 6, 0, 0, 12, 11, 12, 12, 7, 10, 1, 2, 5, 6, 3, 4,
-            10, 6, 6, 3, 7, 8, 12, 9, 5, 10, 12, 12
-        ], dtype=torch.long))
-        # correct device alongside the model — no manual .to(device) calls needed.
+        # Initialize the model with exactly 13 labels.
+        # This tells huggingface to discard the pretrained 28-class head from GoEmotions
+        # and initialize a fresh, random classification head with 13 outputs.
+        self.model = AutoModelForSequenceClassification.from_pretrained(
+            self.hparams.encoder_model,
+            num_labels=13,
+            ignore_mismatched_sizes=True
+        )
 
         pos_weight_13, _, _ = compute_weights_from_csv(
             [self.hparams.train_csv, self.hparams.dev_csv],
             clamp_max=getattr(self.hparams, 'focal_weight_clamp', 20.0),
         )
-        _expand = torch.tensor([
-            6, 6, 0, 0, 12, 11, 12, 12, 7, 10, 1, 2, 5, 6, 3, 4,
-            10, 6, 6, 3, 7, 8, 12, 9, 5, 10, 12, 12
-        ], dtype=torch.long)
-        pos_weight_28 = pos_weight_13[_expand]  # shape [28]
 
         self.loss_fn = FocalLoss(
             gamma=getattr(self.hparams, 'focal_gamma', 2.0),
-            pos_weight=pos_weight_28,
+            pos_weight=pos_weight_13,
             reduction='mean',
         )
 
@@ -183,18 +176,16 @@ class EmotionModel(pl.LightningModule):
     def forward(self, input_ids, attention_mask):
         return self.model(input_ids=input_ids, attention_mask=attention_mask).logits
 
-    def calculate_loss(self, logits_28, targets_13):
-        # self.mapping is already on the right device via register_buffer
-        targets_28 = targets_13[:, self.mapping]
-        loss = self.loss_fn(logits_28, targets_28)
-        return loss, targets_28
+    def calculate_loss(self, logits_13, targets_13):
+        loss = self.loss_fn(logits_13, targets_13)
+        return loss, targets_13
 
     def training_step(self, batch, batch_nb):
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_28 = self.forward(input_ids, attention_mask)
-        loss, _ = self.calculate_loss(logits_28, targets['labels_aux'])
+        logits_13 = self.forward(input_ids, attention_mask)
+        loss, _ = self.calculate_loss(logits_13, targets['labels_aux'])
 
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         self.training_step_outputs.append({"loss": loss})
@@ -204,15 +195,15 @@ class EmotionModel(pl.LightningModule):
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_28 = self.forward(input_ids, attention_mask)
-        loss, targets_28 = self.calculate_loss(logits_28, targets['labels_aux'])
+        logits_13 = self.forward(input_ids, attention_mask)
+        loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
-        preds_28 = (logits_28 > 0).float()
+        preds_13 = (logits_13 > 0).float()
 
         output = {
             "val_loss": loss,
-            "preds": preds_28,
-            "targets": targets_28,
+            "preds": preds_13,
+            "targets": targets_13,
         }
         self.validation_step_outputs.append(output)
         return output
@@ -257,15 +248,15 @@ class EmotionModel(pl.LightningModule):
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_28 = self.forward(input_ids, attention_mask)
-        loss, targets_28 = self.calculate_loss(logits_28, targets['labels_aux'])
+        logits_13 = self.forward(input_ids, attention_mask)
+        loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
-        preds_28 = (logits_28 > 0).float()
+        preds_13 = (logits_13 > 0).float()
 
         output = {
             "test_loss": loss,
-            "preds": preds_28,
-            "targets": targets_28,
+            "preds": preds_13,
+            "targets": targets_13,
         }
         self.test_step_outputs.append(output)
         return output

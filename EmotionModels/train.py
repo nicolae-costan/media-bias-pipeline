@@ -71,6 +71,8 @@ def main(hparams) -> None:
         max_epochs=hparams.max_epochs,
         min_epochs=hparams.min_epochs,
         accumulate_grad_batches=hparams.accumulate_grad_batches,
+        gradient_clip_val=hparams.grad_clip,  # Threshold for clipping
+        gradient_clip_algorithm="norm",
         limit_val_batches=hparams.val_percent_check,
     )
 
@@ -104,7 +106,7 @@ if __name__ == "__main__":
     parser.add_argument("--gpus", type=int, default=1)
     parser.add_argument("--accumulate_grad_batches", default=1, type=int)
     parser.add_argument("--val_percent_check", default=1.0, type=float)
-
+    parser.add_argument("--grad_clip", type=float, default=1.0)
     # Search mode
     parser.add_argument("--search_mode", default=False, type=bool)
 
