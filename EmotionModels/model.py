@@ -9,6 +9,8 @@ from transformers import get_linear_schedule_with_warmup, AutoModelForSequenceCl
 from sklearn.metrics import jaccard_score
 import logging
 import pandas as pd
+import json
+
 
 from dataloader import sentiment_analysis_dataset, MyCollator
 
@@ -64,11 +66,64 @@ class FocalLoss(nn.Module):
             return loss
 
 
+class AsymmetricLoss(nn.Module):
+    """
+    Asymmetric Loss (ASL) for multi-label classification.
+    Designed to handle severe class imbalance by decoupling positive and negative focusing.
+    
+    L = -y(1-p)^gamma_pos * log(p) - (1-y)p_m^gamma_neg * log(1-p_m)
+    where p_m = shifted/clipped probability for negative samples.
+    """
+    def __init__(self, gamma_neg=4, gamma_pos=1, clip=0.05, eps=1e-8, pos_weight=None):
+        super().__init__()
+        self.gamma_neg = gamma_neg
+        self.gamma_pos = gamma_pos
+        self.clip = clip
+        self.eps = eps
+        if pos_weight is not None:
+            self.register_buffer('pos_weight', pos_weight)
+        else:
+            self.pos_weight = None
+
+    def forward(self, logits, targets):
+        # Calculate probabilities
+        probs = torch.sigmoid(logits)
+        
+        # Positive samples
+        loss_pos = targets * torch.log(probs.clamp(min=self.eps))
+        if self.gamma_pos > 0:
+            loss_pos *= (1 - probs) ** self.gamma_pos
+            
+        # Negative samples
+        # Asymmetric Clipping/Probability shifting (pm)
+        probs_neg = 1 - probs
+        if self.clip is not None and self.clip > 0:
+            probs_neg = (probs_neg + self.clip).clamp(max=1)
+            
+        loss_neg = (1 - targets) * torch.log(probs_neg.clamp(min=self.eps))
+        if self.gamma_neg > 0:
+            # Note: in ASL, we use the shifted probability (probs_neg) for the focusing term
+            loss_neg *= (1 - probs_neg) ** self.gamma_neg
+            
+        loss = -(loss_pos + loss_neg)
+        
+        if self.pos_weight is not None:
+            loss *= self.pos_weight
+            
+        return loss.mean()
+
+
 def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
 
     dfs = []
 
     for path in csv_paths:
+        if not os.path.exists(path):
+            # Try prepending EmotionModels/ if run from project root
+            alt_path = os.path.join("EmotionModels", path)
+            if os.path.exists(alt_path):
+                path = alt_path
+        
         if os.path.exists(path):
             dfs.append(pd.read_csv(path))
 
@@ -145,11 +200,32 @@ class EmotionModel(pl.LightningModule):
             clamp_max=getattr(self.hparams, 'focal_weight_clamp', 20.0),
         )
 
-        self.loss_fn = FocalLoss(
-            gamma=getattr(self.hparams, 'focal_gamma', 2.0),
-            pos_weight=pos_weight_13,
-            reduction='mean',
-        )
+        if getattr(self.hparams, 'use_asl', True):
+            self.loss_fn = AsymmetricLoss(
+                gamma_neg=getattr(self.hparams, 'asl_gamma_neg', 4.0),
+                gamma_pos=getattr(self.hparams, 'asl_gamma_pos', 1.0),
+                clip=getattr(self.hparams, 'asl_clip', 0.05),
+                pos_weight=pos_weight_28
+            )
+        else:
+            self.loss_fn = FocalLoss(
+                gamma=getattr(self.hparams, 'focal_gamma', 2.0),
+                pos_weight=pos_weight_28,
+                reduction='mean',
+            )
+
+        # Default thresholds (0.5 for all 28 nodes)
+        self.register_buffer('thresholds', torch.ones(28, dtype=torch.float) * 0.5)
+
+    def load_thresholds(self, thresholds_path):
+        if os.path.exists(thresholds_path):
+            with open(thresholds_path, 'r') as f:
+                t_list = json.load(f)
+            if len(t_list) == 28:
+                self.thresholds = torch.tensor(t_list, dtype=torch.float, device=self.device)
+                print(f"--- Loaded {len(t_list)} thresholds from {thresholds_path} ---")
+            else:
+                print(f"--- Warning: Expected 28 thresholds, got {len(t_list)} ---")
 
     def setup(self, stage: str = None):
         if stage == 'fit':
@@ -198,6 +274,9 @@ class EmotionModel(pl.LightningModule):
         logits_13 = self.forward(input_ids, attention_mask)
         loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
+        # Use custom thresholds if available
+        probs_28 = torch.sigmoid(logits_28)
+        preds_28 = (probs_28 > self.thresholds).float()
         preds_13 = (logits_13 > 0).float()
 
         output = {
@@ -251,6 +330,9 @@ class EmotionModel(pl.LightningModule):
         logits_13 = self.forward(input_ids, attention_mask)
         loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
+        # Use custom thresholds if available
+        probs_28 = torch.sigmoid(logits_28)
+        preds_28 = (probs_28 > self.thresholds).float()
         preds_13 = (logits_13 > 0).float()
 
         output = {
@@ -340,6 +422,12 @@ class EmotionModel(pl.LightningModule):
 
     @classmethod
     def add_model_specific_args(cls, parser):
+        # ASL hyperparameters
+        parser.add_argument("--use_asl", default=True, type=bool, help="Use Asymmetric Loss instead of Focal Loss")
+        parser.add_argument("--asl_gamma_neg", default=4.0, type=float)
+        parser.add_argument("--asl_gamma_pos", default=1.0, type=float)
+        parser.add_argument("--asl_clip", default=0.05, type=float)
+        
         parser.add_argument("--encoder_model", default="SamLowe/roberta-base-go_emotions", type=str)
         parser.add_argument("--encoder_learning_rate", default=2e-5, type=float)
         parser.add_argument("--warmup_proportion", default=0.1, type=float)
