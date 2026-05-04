@@ -205,27 +205,27 @@ class EmotionModel(pl.LightningModule):
                 gamma_neg=getattr(self.hparams, 'asl_gamma_neg', 4.0),
                 gamma_pos=getattr(self.hparams, 'asl_gamma_pos', 1.0),
                 clip=getattr(self.hparams, 'asl_clip', 0.05),
-                pos_weight=pos_weight_28
+                pos_weight=pos_weight_13
             )
         else:
             self.loss_fn = FocalLoss(
                 gamma=getattr(self.hparams, 'focal_gamma', 2.0),
-                pos_weight=pos_weight_28,
+                pos_weight=pos_weight_13,
                 reduction='mean',
             )
 
-        # Default thresholds (0.5 for all 28 nodes)
-        self.register_buffer('thresholds', torch.ones(28, dtype=torch.float) * 0.5)
+        # Default thresholds (0.5 for all 13 nodes)
+        self.register_buffer('thresholds', torch.ones(13, dtype=torch.float) * 0.5)
 
     def load_thresholds(self, thresholds_path):
         if os.path.exists(thresholds_path):
             with open(thresholds_path, 'r') as f:
                 t_list = json.load(f)
-            if len(t_list) == 28:
+            if len(t_list) == 13:
                 self.thresholds = torch.tensor(t_list, dtype=torch.float, device=self.device)
                 print(f"--- Loaded {len(t_list)} thresholds from {thresholds_path} ---")
             else:
-                print(f"--- Warning: Expected 28 thresholds, got {len(t_list)} ---")
+                print(f"--- Warning: Expected 13 thresholds, got {len(t_list)} ---")
 
     def setup(self, stage: str = None):
         if stage == 'fit':
@@ -275,9 +275,8 @@ class EmotionModel(pl.LightningModule):
         loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
         # Use custom thresholds if available
-        probs_28 = torch.sigmoid(logits_28)
-        preds_28 = (probs_28 > self.thresholds).float()
-        preds_13 = (logits_13 > 0).float()
+        probs_13 = torch.sigmoid(logits_13)
+        preds_13 = (probs_13 > self.thresholds).float()
 
         output = {
             "val_loss": loss,
@@ -331,9 +330,8 @@ class EmotionModel(pl.LightningModule):
         loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
 
         # Use custom thresholds if available
-        probs_28 = torch.sigmoid(logits_28)
-        preds_28 = (probs_28 > self.thresholds).float()
-        preds_13 = (logits_13 > 0).float()
+        probs_13 = torch.sigmoid(logits_13)
+        preds_13 = (probs_13 > self.thresholds).float()
 
         output = {
             "test_loss": loss,
