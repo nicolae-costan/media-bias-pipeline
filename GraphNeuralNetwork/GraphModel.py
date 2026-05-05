@@ -48,6 +48,7 @@ class GraphBiasLabels(nn.Module):
             num_classes: int = 2,
             gat_heads: int = 4,
 
+
     ):
         super(GraphBiasLabels, self).__init__()
         self.dropout = dropout
@@ -97,4 +98,23 @@ class GraphBiasLabels(nn.Module):
 
         # Classification head
         self.classifier = nn.Linear(bottleneck_dim, num_classes)
+
+
+    def loss(self,logits,y,label_weights,mask):
+        '''
+        y is the value there might be unlabeled data
+        label_weights are the aggrement score per article
+        mask is the data that we train on
+        '''
+        loss = nn.CrossEntropyLoss()
+
+        valid = mask & (y != -1)
+        logits_m = logits[valid]
+        y_m = y[valid]
+        weights = label_weights[valid]
+
+        ce = F.cross_entropy(logits_m, y_m, weights)
+
+        loss = (ce * weights).sum() / weights.sum().clamp(min=1e-6)
+        return loss
 
