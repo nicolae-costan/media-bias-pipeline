@@ -118,3 +118,119 @@ class GraphBiasLabels(nn.Module):
         loss = (ce * weights).sum() / weights.sum().clamp(min=1e-6)
         return loss
 
+    def forward(self, x, emotions, edge_index):
+        cls_proj = self.cls_proj(x)
+        emo_proj = self.emo_proj(emotions)
+
+        h = self.pre_gat_linear(torch.cat([cls_proj, emo_proj], dim=-1))
+
+        for gat, norm in zip(self.gat_layers, self.gat_norms):
+            h = norm(F.dropout(gat(h, edge_index), p=self.dropout, training=self.training) + h)
+
+        h = self.bottleneck(h)
+        return self.classifier(h)
+
+    def configure_optimizers(self):
+        """
+        Returns (optimizer, scheduler).
+
+        Two param groups — different LRs because:
+          - Projection MLPs are simple and converge fast → higher LR is fine
+          - GAT attention weights are sensitive → lower LR avoids early collapse
+
+        AdamW vs Adam:
+            Adam folds weight decay into the adaptive moment update (wrong).
+            AdamW decouples them, giving proper L2 regularization. Always prefer AdamW.
+
+        ReduceLROnPlateau on val F1:
+            Halves LR when val F1 stalls. Critical for GNNs which often need
+            a smaller LR to push past an early plateau.
+        """
+        proj_params = (
+                list(self.cls_proj.parameters()) +
+                list(self.emo_proj.parameters()) +
+                list(self.pre_gat_linear.parameters())
+        )
+        gat_params = (
+                list(self.gat_layers.parameters()) +
+                list(self.gat_norms.parameters()) +
+                list(self.bottleneck.parameters()) +
+                list(self.classifier.parameters())
+        )
+
+        optimizer = torch.optim.AdamW(
+            [
+                {"params": proj_params, "lr": self.lr_proj},
+                {"params": gat_params, "lr": self.lr_gat},
+            ],
+            weight_decay=self.weight_decay,
+        )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="max",  # maximize val F1
+            patience=self.scheduler_patience,
+            factor=self.scheduler_factor,
+            min_lr=self.min_lr,
+            verbose=True,
+        )
+        return optimizer, scheduler
+
+    def train_step(self, data, optimizer):
+        """
+        One gradient update on the full graph.
+
+        Returns:
+            float: training loss value
+        """
+        self.train()
+        optimizer.zero_grad()
+
+        logits = self(data.x, data.emotions, data.edge_index)
+        loss = self.loss(logits, data.y, data.label_weights, data.train_mask)
+        loss.backward()
+
+        # Clip gradients — GAT attention scores can spike early in training
+        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+        optimizer.step()
+        return loss.item()
+
+    @torch.no_grad()
+    def validation_step(self, data):
+        """
+        Full-graph inference evaluated on val_mask nodes.
+
+        Returns dict:
+            loss      : float
+            accuracy  : float
+            f1_macro  : float  ← use this to drive the scheduler and early stopping
+            f1_biased : float  ← F1 on the positive class (biased articles)
+            report    : str    full sklearn classification report
+        """
+        self.eval()
+
+        logits = self(data.x, data.emotions, data.edge_index)
+        preds = logits.argmax(dim=-1)
+
+        val_loss = self.loss(logits, data.y, data.label_weights, data.val_mask)
+
+        valid = data.val_mask & (data.y != -1)
+        y_true = data.y[valid].cpu().numpy()
+        y_pred = preds[valid].cpu().numpy()
+
+        acc = float((y_true == y_pred).mean())
+        f1_macro = float(f1_score(y_true, y_pred, average="macro", zero_division=0))
+        f1_bias = float(f1_score(y_true, y_pred, average="binary", pos_label=1, zero_division=0))
+        report = classification_report(
+            y_true, y_pred,
+            target_names=["Non-biased", "Biased"],
+            zero_division=0,
+        )
+
+        return {
+            "loss": val_loss.item(),
+            "accuracy": acc,
+            "f1_macro": f1_macro,
+            "f1_biased": f1_bias,
+            "report": report,
+        }
