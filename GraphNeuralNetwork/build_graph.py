@@ -82,8 +82,8 @@ def load_embeddings(conn_params: dict):
 
 def compute_agreement(sg1_path:str, sg2_path:str,id_col,label_col):
 
-    sg1 = pd.read_csv(sg1_path)
-    sg2 = pd.read_csv(sg2_path)
+    sg1 = pd.read_csv(sg1_path, sep=';', on_bad_lines='skip')
+    sg2 = pd.read_csv(sg2_path, sep=';', on_bad_lines='skip')
 
     all_anotations = pd.concat([sg1, sg2],ignore_index=True)
 
@@ -149,7 +149,7 @@ def build_label_tensors(
     id_to_idx = {aid:i for i,aid in enumerate(article_ids)}
 
 
-    babe = pd.read_csv(babe_path)
+    babe = pd.read_csv(babe_path, sep=';', on_bad_lines='skip')
     babe[babe_id_col] = babe[babe_id_col].astype(str)
 
     # compute aggreement
