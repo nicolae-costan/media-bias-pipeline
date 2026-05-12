@@ -679,19 +679,19 @@ class BERTRegressor(pl.LightningModule):
         )
         parser.add_argument(
             "--train_csv",
-            default="Resources/UsVsThem_train_public.csv",
+            default="data/UsVsThem_train_public.csv",
             type=str,
             help="Path to the file containing the train data.",
         )
         parser.add_argument(
             "--dev_csv",
-            default="Resources/UsVsThem_valid_public.csv",
+            default="data/UsVsThem_valid_public.csv",
             type=str,
             help="Path to the file containing the train data.",
         )
         parser.add_argument(
             "--test_csv",
-            default="Resources/UsVsThem_test_public.csv",
+            default="data/UsVsThem_test_public.csv",
             type=str,
             help="Path to the file containing the train data.",
         )

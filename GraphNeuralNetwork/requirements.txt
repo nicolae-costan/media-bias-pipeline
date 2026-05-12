@@ -1,0 +1,28 @@
+# Core PyTorch and Lightning
+torch
+pytorch-lightning
+torch-geometric
+
+# Natural Language Processing & Transformers
+transformers
+datasets
+
+# Data Processing & Math
+pandas
+numpy
+scipy
+scikit-learn
+
+# Database
+psycopg2-binary
+
+# Big Data
+pyspark
+
+# Environment Variables
+python-dotenv
+
+# Visualizations and Notebooks
+matplotlib
+jupyter
+notebook

@@ -179,8 +179,8 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_name', type=str, default='SamLowe/roberta-base-go_emotions')
-    parser.add_argument('--train_csv', type=str, default='Resources/UsVsThem_train_public.csv')
-    parser.add_argument('--dev_csv', type=str, default='Resources/UsVsThem_valid_public.csv')
+    parser.add_argument('--train_csv', type=str, default='data/UsVsThem_train_public.csv')
+    parser.add_argument('--dev_csv', type=str, default='data/UsVsThem_valid_public.csv')
     parser.add_argument('--max_length', type=int, default=128)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--accumulate_grad_batches', type=int, default=1)
