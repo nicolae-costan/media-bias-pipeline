@@ -128,7 +128,7 @@ def optimize_thresholds(checkpoint_path, dev_csv, output_json="EmotionModels/thr
 
 if __name__ == "__main__":
     CKPT = "tb_logs/emotion_classification/version_4/checkpoints/epoch=3-val_loss=0.0858.ckpt"
-    DEV_CSV = "EmotionModels/Resources/UsVsThem_valid_public.csv"
+    DEV_CSV = "data/UsVsThem_valid_public.csv"
     
     # Check if we are running from project root or EmotionModels folder
     if not os.path.exists(CKPT) and os.path.exists("../" + CKPT):

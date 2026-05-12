@@ -27,9 +27,9 @@ def get_args():
     parser.add_argument("--db_password", type=str, default=os.getenv("DB_PASSWORD"))
 
     # File Paths
-    parser.add_argument("--babe_csv", type=str, default=os.getenv("BABE_CSV", "final_labels_mbic.csv"))
-    parser.add_argument("--sg1_csv", type=str, default=os.getenv("SG1_CSV", "sg1.csv"))
-    parser.add_argument("--sg2_csv", type=str, default=os.getenv("SG2_CSV", "sg2.csv"))
+    parser.add_argument("--babe_csv", type=str, default=os.getenv("BABE_CSV", "../data/final_labels_MBIC.csv"))
+    parser.add_argument("--sg1_csv", type=str, default=os.getenv("SG1_CSV", "../data/raw_labels_SG1.csv"))
+    parser.add_argument("--sg2_csv", type=str, default=os.getenv("SG2_CSV", "../data/raw_labels_SG2.csv"))
 
     # Column mappings (Kept as hardcoded defaults, but you can add these to .env too if you want)
     # Column mappings (Now pulled from .env)

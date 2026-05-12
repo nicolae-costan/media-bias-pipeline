@@ -119,8 +119,9 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
 
     for path in csv_paths:
         if not os.path.exists(path):
-            # Try prepending EmotionModels/ if run from project root
-            alt_path = os.path.join("EmotionModels", path)
+            # Universally resolve against the project root's data directory
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            alt_path = os.path.join(project_root, "data", os.path.basename(path))
             if os.path.exists(alt_path):
                 path = alt_path
         
@@ -164,8 +165,13 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
 class EmotionModel(pl.LightningModule):
 
 
-    def __init__(self, hparams) -> None:
+    def __init__(self, hparams=None, **kwargs) -> None:
         super(EmotionModel, self).__init__()
+
+        # If loaded from checkpoint, Lightning passes hyperparameters as kwargs
+        if hparams is None:
+            import argparse
+            hparams = argparse.Namespace(**kwargs)
 
         # Clean hparams to prevent TensorBoard/Logger crashes with non-scalar types
         if hasattr(hparams, '__dict__'):
@@ -431,9 +437,9 @@ class EmotionModel(pl.LightningModule):
         parser.add_argument("--warmup_proportion", default=0.1, type=float)
         parser.add_argument("--max_length", default=128, type=int)
         parser.add_argument("--loader_workers", default=0, type=int)
-        parser.add_argument("--train_csv", default="Resources/UsVsThem_train_public.csv", type=str)
-        parser.add_argument("--dev_csv", default="Resources/UsVsThem_valid_public.csv", type=str)
-        parser.add_argument("--test_csv", default="Resources/UsVsThem_test_public.csv", type=str)
+        parser.add_argument("--train_csv", default="data/UsVsThem_train_public.csv", type=str)
+        parser.add_argument("--dev_csv", default="data/UsVsThem_valid_public.csv", type=str)
+        parser.add_argument("--test_csv", default="data/UsVsThem_test_public.csv", type=str)
         # Focal Loss hyperparameters
         parser.add_argument("--focal_gamma", default=2.0, type=float,
                             help="Focusing parameter for FocalLoss. 0 = standard BCE.")
