@@ -232,7 +232,11 @@ def embed_partition(
                 output_hidden_states=True
             )
 
-            cls_chunks = outputs.hidden_states[-1][:, 0, :].cpu().numpy()
+            last_hidden = outputs.hidden_states[-1]  # [chunks, seq_len, 768]
+            mask = tokenized['attention_mask'].unsqueeze(-1)  # [chunks, seq_len, 1]
+            sum_hidden = (last_hidden * mask).sum(dim=1)  # [chunks, 768]
+            count = mask.sum(dim=1).clamp(min=1e-9)  # [chunks, 1]
+            cls_chunks = (sum_hidden / count).cpu().numpy()  # [chunks, 768]
 
             logits_aux = outputs.logits
             if logits_aux is not None:
