@@ -98,7 +98,6 @@ def _get_model_and_tokenizer(checkpoint_path, model_name, num_groups, num_classe
 
     return _model_cache[key], _tokenizer_cache[key]
 
-
 def create_table_if_not_exists(conn_params: dict):
     """Create the article_embeddings table if it doesn't exist."""
     print(f"[DB] Connecting to {conn_params['host']}:{conn_params['port']} ...")

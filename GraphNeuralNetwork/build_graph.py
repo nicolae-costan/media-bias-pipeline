@@ -1,6 +1,8 @@
 
 import os
 import argparse
+from typing import Dict
+
 import numpy as np
 import pandas as pd
 import psycopg2
@@ -209,7 +211,7 @@ def build_label_tensors(
     return y, train_mask, val_mask, test_mask, low_conf_mask, weights
 
 
-def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size = 1000):
+def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_labels:dict[str,int],top_k:int,sim_threshold:float,chunk_size = 1000,same_label_bonus=0.05, diff_label_penalty=0.10):
     """
         Builds a bidirectional k-Nearest Neighbors (k-NN) graph based on cosine similarity.
 
@@ -235,61 +237,92 @@ def build_edges(embeddings: np.ndarray,top_k:int,sim_threshold:float,chunk_size 
     """
 
     # make it a unit vector
-    normed = normalize(embeddings,norm='l2')
-    N = len(normed)
+    # how much we take into account embeddings and emotion scores
+    ALPHA = 0.8
+    BETA = 0.2
+    normed_emb = normalize(embeddings, norm='l2')
+    normed_emo = normalize(emotions, norm='l2')
+
+    # Build label lookup: article_id -> label (or -1 if unknown)
+    id_to_label = {aid: known_labels.get(aid, -1) for aid in article_ids}
+    label_arr = np.array([id_to_label[aid] for aid in article_ids], dtype=np.int32)
+
+    N = len(normed_emb)
     rows_list = []
     cols_list = []
     vals_list = []
 
+
     print(f"[build_graph] Building KNN graph (top_k={top_k}, threshold={sim_threshold})...")
     for start in tqdm(range(0,N,chunk_size)):
-        end = min(N,start+chunk_size)
-        chunk = normed[start:end]
+        end = min(N, start + chunk_size)
 
-        sims = cosine_similarity(chunk,normed)
+        sim_emb = cosine_similarity(normed_emb[start:end], normed_emb)
+        sim_emo = cosine_similarity(normed_emo[start:end], normed_emo)
+        sims = ALPHA * sim_emb + BETA * sim_emo  # [chunk, N]
 
-        # get every row
-        for local_i, row_sims in enumerate(sims):
-            global_i = start + local_i
+        chunk_labels = label_arr[start:end]
 
-            # Exclude self-similarity
-            row_sims[global_i] = -1.0
+        for start in range(0, N, chunk_size):
+            end = min(N, start + chunk_size)
 
-            # Get top_k indices above threshold by reversing the list
-            top_indices = np.argsort(row_sims)[::-1][:top_k]
+            sim_emb = cosine_similarity(normed_emb[start:end], normed_emb)
+            sim_emo = cosine_similarity(normed_emo[start:end], normed_emo)
+            sims = ALPHA * sim_emb + BETA * sim_emo  # [chunk, N]
 
-            for j in top_indices:
-                if row_sims[j] >= sim_threshold:
-                    rows_list.append(global_i)
-                    cols_list.append(j)
-                    vals_list.append(float(row_sims[j]))
+            chunk_labels = label_arr[start:end]  # [chunk]
 
-    # make arrays
-    rows_arr = np.array(rows_list + cols_list, dtype=np.int64)
-    cols_arr = np.array(cols_list + rows_list, dtype=np.int64)
-    vals_arr = np.array(vals_list + vals_list, dtype=np.float32)
+            for local_i, row_sims in enumerate(sims):
+                global_i = start + local_i
+                label_i = chunk_labels[local_i]
+                row_sims = row_sims.copy()
+                row_sims[global_i] = -1.0
 
-    # Deduplicate having an array as [0,1] and the other one as [1,0]
-    edge_set = {}
-    for r, c, v in zip(rows_arr, cols_arr, vals_arr):
-        key = (min(r, c), max(r, c))
-        if key not in edge_set:
-            edge_set[key] = v
+                # Apply label-aware adjustment only when both nodes are labeled
+                if label_i != -1:
+                    same_mask = (label_arr == label_i)
+                    diff_mask = (label_arr != label_i) & (label_arr != -1)
+                    row_sims[same_mask] += same_label_bonus
+                    row_sims[diff_mask] -= diff_label_penalty
 
-    final_rows = []
-    final_cols = []
-    final_vals = []
-    for (r, c), v in edge_set.items():
-        final_rows.extend([r, c])
-        final_cols.extend([c, r])
-        final_vals.extend([v, v])
+                top_indices = np.argsort(row_sims)[::-1][:top_k]
+                for j in top_indices:
+                    if row_sims[j] >= sim_threshold:
+                        rows_list.append(global_i)
+                        cols_list.append(j)
+                        vals_list.append(float(row_sims[j]))
 
-    edge_index = torch.tensor([final_rows, final_cols], dtype=torch.long)
-    edge_attr = torch.tensor(final_vals, dtype=torch.float).unsqueeze(1)
+            # Bidirectional dedup
+        rows_arr = np.array(rows_list + cols_list, dtype=np.int64)
+        cols_arr = np.array(cols_list + rows_list, dtype=np.int64)
+        vals_arr = np.array(vals_list + vals_list, dtype=np.float32)
 
-    print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
-    return edge_index, edge_attr
+        edge_set = {}
+        for r, c, v in zip(rows_arr, cols_arr, vals_arr):
+            key = (min(r, c), max(r, c))
+            if key not in edge_set:
+                edge_set[key] = v
 
+        final_rows, final_cols, final_vals = [], [], []
+        for (r, c), v in edge_set.items():
+            final_rows.extend([r, c])
+            final_cols.extend([c, r])
+            final_vals.extend([v, v])
+
+        edge_index = torch.tensor([final_rows, final_cols], dtype=torch.long)
+        edge_attr = torch.tensor(final_vals, dtype=torch.float).unsqueeze(1)
+
+        print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
+        return edge_index, edge_attr
+
+def get_article_mapping(args)->Dict[str, int]:
+    babe_df = pd.read_csv(os.getenv("BABE_CSV"),sep=";",on_bad_lines='skip')
+    label_map = {"Biased": 1, "Non-biased": 0}
+    known_labels = {
+        str(row[args.babe_id_col]): label_map.get(row[args.babe_label_col], -1)
+        for _, row in babe_df.iterrows()
+    }
+    return known_labels
 
 def main():
     args =  get_args()
@@ -305,11 +338,15 @@ def main():
     # i think we should use only the embeddings not the emotions
     article_ids,embeddings,emotions = load_embeddings(conn_params)
 
+    known_labels = get_article_mapping(args)
     #node_features = np.concatenate([embeddings,emotions],axis = 1)
 
     x = torch.tensor(embeddings, dtype=torch.float)
     edge_index, edge_attr = build_edges(
+        article_ids,
         embeddings,
+        emotions,
+        known_labels,
         top_k=args.top_k,
         sim_threshold=args.sim_threshold,
         chunk_size=args.chunk_size,
