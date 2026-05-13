@@ -61,20 +61,31 @@ def load_embeddings(conn_params: dict):
         article_ids : list of str, length N
         embeddings  : np.ndarray [N, 768]
         emotions    : np.ndarray [N, 13]
+
+    Uses a named server-side cursor (itersize=2000) so rows are streamed
+    from Postgres in batches rather than loaded all at once with fetchall().
     """
     conn = psycopg2.connect(**conn_params)
-    cur  = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    # Named cursor → server-side: fetches `itersize` rows at a time
+    cur = conn.cursor(name="emb_stream", cursor_factory=psycopg2.extras.DictCursor)
+    cur.itersize = 2000
 
     print("[build_graph] Loading embeddings from PostgreSQL...")
     cur.execute("SELECT article_id, embedding, emotion_scores FROM article_embeddings ORDER BY article_id")
-    rows = cur.fetchall()
+
+    article_ids = []
+    embeddings_list = []
+    emotions_list = []
+    for row in cur:
+        article_ids.append(row["article_id"])
+        embeddings_list.append(row["embedding"])
+        emotions_list.append(row["emotion_scores"])
 
     cur.close()
     conn.close()
 
-    article_ids = [r["article_id"] for r in rows]
-    embeddings  = np.array([r["embedding"]     for r in rows], dtype=np.float32)
-    emotions    = np.array([r["emotion_scores"] for r in rows], dtype=np.float32)
+    embeddings = np.array(embeddings_list, dtype=np.float32)
+    emotions   = np.array(emotions_list,   dtype=np.float32)
 
     print(f"[build_graph] Loaded {len(article_ids):,} articles")
     print(f"[build_graph] Embedding shape : {embeddings.shape}")
@@ -254,66 +265,58 @@ def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_la
 
 
     print(f"[build_graph] Building KNN graph (top_k={top_k}, threshold={sim_threshold})...")
-    for start in tqdm(range(0,N,chunk_size)):
-        end = min(N, start + chunk_size)
+    # One loop over chunks — `chunk_start` is the outer variable, never shadowed.
+    for chunk_start in tqdm(range(0, N, chunk_size)):
+        chunk_end = min(N, chunk_start + chunk_size)
 
-        sim_emb = cosine_similarity(normed_emb[start:end], normed_emb)
-        sim_emo = cosine_similarity(normed_emo[start:end], normed_emo)
+        sim_emb = cosine_similarity(normed_emb[chunk_start:chunk_end], normed_emb)
+        sim_emo = cosine_similarity(normed_emo[chunk_start:chunk_end], normed_emo)
         sims = ALPHA * sim_emb + BETA * sim_emo  # [chunk, N]
 
-        chunk_labels = label_arr[start:end]
+        chunk_labels = label_arr[chunk_start:chunk_end]
 
-        for start in range(0, N, chunk_size):
-            end = min(N, start + chunk_size)
+        for local_i, row_sims in enumerate(sims):
+            global_i = chunk_start + local_i
+            label_i  = chunk_labels[local_i]
+            row_sims = row_sims.copy()
+            row_sims[global_i] = -1.0  # exclude self-loops
 
-            sim_emb = cosine_similarity(normed_emb[start:end], normed_emb)
-            sim_emo = cosine_similarity(normed_emo[start:end], normed_emo)
-            sims = ALPHA * sim_emb + BETA * sim_emo  # [chunk, N]
+            # Apply label-aware adjustment only when both nodes are labeled
+            if label_i != -1:
+                same_mask = (label_arr == label_i)
+                diff_mask = (label_arr != label_i) & (label_arr != -1)
+                row_sims[same_mask] += same_label_bonus
+                row_sims[diff_mask] -= diff_label_penalty
 
-            chunk_labels = label_arr[start:end]  # [chunk]
+            top_indices = np.argsort(row_sims)[::-1][:top_k]
+            for j in top_indices:
+                if row_sims[j] >= sim_threshold:
+                    rows_list.append(global_i)
+                    cols_list.append(j)
+                    vals_list.append(float(row_sims[j]))
 
-            for local_i, row_sims in enumerate(sims):
-                global_i = start + local_i
-                label_i = chunk_labels[local_i]
-                row_sims = row_sims.copy()
-                row_sims[global_i] = -1.0
+    # --- Bidirectional dedup (OUTSIDE the loop — runs once after all chunks) ---
+    rows_arr = np.array(rows_list + cols_list, dtype=np.int64)
+    cols_arr = np.array(cols_list + rows_list, dtype=np.int64)
+    vals_arr = np.array(vals_list + vals_list, dtype=np.float32)
 
-                # Apply label-aware adjustment only when both nodes are labeled
-                if label_i != -1:
-                    same_mask = (label_arr == label_i)
-                    diff_mask = (label_arr != label_i) & (label_arr != -1)
-                    row_sims[same_mask] += same_label_bonus
-                    row_sims[diff_mask] -= diff_label_penalty
+    edge_set = {}
+    for r, c, v in zip(rows_arr, cols_arr, vals_arr):
+        key = (min(r, c), max(r, c))
+        if key not in edge_set:
+            edge_set[key] = v
 
-                top_indices = np.argsort(row_sims)[::-1][:top_k]
-                for j in top_indices:
-                    if row_sims[j] >= sim_threshold:
-                        rows_list.append(global_i)
-                        cols_list.append(j)
-                        vals_list.append(float(row_sims[j]))
+    final_rows, final_cols, final_vals = [], [], []
+    for (r, c), v in edge_set.items():
+        final_rows.extend([r, c])
+        final_cols.extend([c, r])
+        final_vals.extend([v, v])
 
-            # Bidirectional dedup
-        rows_arr = np.array(rows_list + cols_list, dtype=np.int64)
-        cols_arr = np.array(cols_list + rows_list, dtype=np.int64)
-        vals_arr = np.array(vals_list + vals_list, dtype=np.float32)
+    edge_index = torch.tensor([final_rows, final_cols], dtype=torch.long)
+    edge_attr  = torch.tensor(final_vals, dtype=torch.float).unsqueeze(1)
 
-        edge_set = {}
-        for r, c, v in zip(rows_arr, cols_arr, vals_arr):
-            key = (min(r, c), max(r, c))
-            if key not in edge_set:
-                edge_set[key] = v
-
-        final_rows, final_cols, final_vals = [], [], []
-        for (r, c), v in edge_set.items():
-            final_rows.extend([r, c])
-            final_cols.extend([c, r])
-            final_vals.extend([v, v])
-
-        edge_index = torch.tensor([final_rows, final_cols], dtype=torch.long)
-        edge_attr = torch.tensor(final_vals, dtype=torch.float).unsqueeze(1)
-
-        print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
-        return edge_index, edge_attr
+    print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
+    return edge_index, edge_attr
 
 def get_article_mapping(args)->Dict[str, int]:
     babe_df = pd.read_csv(os.getenv("BABE_CSV"),sep=";",on_bad_lines='skip')
