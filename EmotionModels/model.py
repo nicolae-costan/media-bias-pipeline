@@ -5,7 +5,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from torch import optim
 from torch.utils.data import DataLoader
-from transformers import get_linear_schedule_with_warmup, AutoModelForSequenceClassification
+from transformers import get_linear_schedule_with_warmup, AutoModel, AutoConfig
 from sklearn.metrics import jaccard_score
 import logging
 import pandas as pd
@@ -192,14 +192,18 @@ class EmotionModel(pl.LightningModule):
 
         # Collator and model
         self.prepare_sample = MyCollator(self.hparams.encoder_model, self.hparams.max_length)
-        # Initialize the model with exactly 13 labels.
-        # This tells huggingface to discard the pretrained 28-class head from GoEmotions
-        # and initialize a fresh, random classification head with 13 outputs.
-        self.model = AutoModelForSequenceClassification.from_pretrained(
+
+        # MInT pooling: load the bare encoder (no classification head) so we can
+        # apply mean pooling ourselves over all non-padding token embeddings.
+        # This replaces the previous CLS-only pooling from AutoModelForSequenceClassification.
+        config = AutoConfig.from_pretrained(self.hparams.encoder_model)
+        self.model = AutoModel.from_pretrained(
             self.hparams.encoder_model,
-            num_labels=13,
-            ignore_mismatched_sizes=True
+            config=config,
         )
+        hidden_size = config.hidden_size
+        # Fresh 13-class linear head (replaces the discarded pretrained head)
+        self.classifier = nn.Linear(hidden_size, 13)
 
         pos_weight_13, _, _ = compute_weights_from_csv(
             [self.hparams.train_csv, self.hparams.dev_csv],
@@ -255,8 +259,27 @@ class EmotionModel(pl.LightningModule):
 
         return input_ids, attention_mask
 
+    @staticmethod
+    def _mean_pooling(token_embeddings: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """
+        MInT (Mean-in-Transformer) pooling.
+        Averages the last hidden states of all non-padding tokens,
+        weighting each token equally (0 for padding, 1 for real tokens).
+        """
+        # Expand mask to match hidden-state shape [B, T, H]
+        mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+        sum_embeddings = torch.sum(token_embeddings * mask_expanded, dim=1)
+        # Avoid division by zero for (degenerate) all-padding sequences
+        sum_mask = mask_expanded.sum(dim=1).clamp(min=1e-9)
+        return sum_embeddings / sum_mask
+
     def forward(self, input_ids, attention_mask):
-        return self.model(input_ids=input_ids, attention_mask=attention_mask).logits
+        # Run the encoder
+        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        # Apply MInT: mean of all non-padding token last hidden states
+        pooled = self._mean_pooling(outputs.last_hidden_state, attention_mask)
+        # Project to 13 emotion logits
+        return self.classifier(pooled)
 
     def calculate_loss(self, logits_13, targets_13):
         loss = self.loss_fn(logits_13, targets_13)
