@@ -1,154 +1,268 @@
+"""
+article_embeddings.py
+---------------------
+Reads articles from a CSV, runs them through the EmotionModel to produce:
+  - A 768-dimensional embedding (mean pooling over the last hidden state)
+  - 13 emotion probability scores
+
+Writes results into two PostgreSQL tables:
+  - articles           (article_id, body, outlet, topic, type, label_bias, news_link)
+  - article_embeddings (article_id, embedding VECTOR(768), emotion_scores FLOAT4[])
+
+Requires pgvector extension and the schema created by setup_db.py.
+
+Usage:
+    python GraphNeuralNetwork/article_embeddings.py \
+        --input_csv "./data/merged_clean_data.csv" \
+        --babe_csv "./data/final_labels_MBIC.csv" \
+        --model_checkpoint "tb_logs/emotion_classification/version_0/checkpoints/epoch=2-val_loss=0.0853.ckpt"
+"""
+
 import argparse
 import re
 import os
 import sys
-import time
 import json
 import pandas as pd
 import numpy as np
 import torch
-import chromadb
+import psycopg2
+import psycopg2.extras
 from tqdm import tqdm
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from the same directory as this script
+env_path = os.path.join(os.path.dirname(__file__), ".env")
+load_dotenv(env_path)
 
-# Caches for model and tokenizer
+# Caches so the model is loaded only once
 _model_cache = {}
 _tokenizer_cache = {}
 
+
 def get_args():
-    parser = argparse.ArgumentParser(description='Embed articles using EmotionModel (Lite Version)')
+    parser = argparse.ArgumentParser(description="Embed articles and store in PostgreSQL with pgvector")
 
-    parser.add_argument("--input_csv", type=str, default="./data/merged_clean_data.csv")
+    # Input data
+    parser.add_argument("--input_csv",  type=str, default="./data/merged_clean_data.csv",
+                        help="CSV with article_id, body, label_bias columns")
+    parser.add_argument("--babe_csv",   type=str, default="./data/final_labels_MBIC.csv",
+                        help="BABE CSV with outlet, topic, type, news_link metadata")
     parser.add_argument("--text_column", type=str, default="body")
-    parser.add_argument("--id_column", type=str, default="article_id")
+    parser.add_argument("--id_column",   type=str, default="article_id")
 
+    # Model
     parser.add_argument("--model_checkpoint", type=str, required=True)
-    parser.add_argument("--num_groups", type=int, default=13)
-    parser.add_argument("--max_length", type=int, default=512)
-    parser.add_argument("--batch_size", type=int, default=16) # Reduced for safety
+    parser.add_argument("--max_length",  type=int, default=512)
+    parser.add_argument("--batch_size",  type=int, default=16)
 
-    parser.add_argument("--db_path", type=str, default="./vector_db")
-    parser.add_argument("--collection_name", type=str, default="article_embeddings")
+    # Database (falls back to .env values)
+    parser.add_argument("--db_host",     type=str, default=os.getenv("DB_HOST", "localhost"))
+    parser.add_argument("--db_port",     type=int, default=int(os.getenv("DB_PORT", 5433)))
+    parser.add_argument("--db_name",     type=str, default=os.getenv("DB_NAME", "media_bias"))
+    parser.add_argument("--db_user",     type=str, default=os.getenv("DB_USER", "postgres"))
+    parser.add_argument("--db_password", type=str, default=os.getenv("DB_PASSWORD", ""))
 
     return parser.parse_args()
 
-def load_model_and_tokenizer(checkpoint_path):
+
+def get_conn(args) -> psycopg2.extensions.connection:
+    return psycopg2.connect(
+        host=args.db_host,
+        port=args.db_port,
+        dbname=args.db_name,
+        user=args.db_user,
+        password=args.db_password,
+    )
+
+
+def load_model_and_tokenizer(checkpoint_path: str):
+    """Load (and cache) the EmotionModel and its tokenizer."""
     global _model_cache, _tokenizer_cache
-    
+
     if checkpoint_path not in _model_cache:
         print(f"--- Loading model from {checkpoint_path} ---")
-        
-        # Add paths to find EmotionModels.model
-        parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-        emotion_dir = os.path.join(parent_dir, 'EmotionModels')
-        if parent_dir not in sys.path: sys.path.append(parent_dir)
-        if emotion_dir not in sys.path: sys.path.append(emotion_dir)
+
+        parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        emotion_dir = os.path.join(parent_dir, "EmotionModels")
+        if parent_dir not in sys.path:
+            sys.path.append(parent_dir)
+        if emotion_dir not in sys.path:
+            sys.path.append(emotion_dir)
 
         from EmotionModels.model import EmotionModel
         from transformers import AutoTokenizer
 
-        # Load model
         model = EmotionModel.load_from_checkpoint(checkpoint_path, map_location="cpu")
         model.eval()
-        
-        # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained(model.hparams.encoder_model)
-        
+
         _model_cache[checkpoint_path] = model
         _tokenizer_cache[checkpoint_path] = tokenizer
-        
+
     return _model_cache[checkpoint_path], _tokenizer_cache[checkpoint_path]
 
+
 def _clean_text(text: str) -> str:
-    if not isinstance(text, str): return ""
+    """Replace URLs with the LINK token."""
+    if not isinstance(text, str):
+        return ""
     return re.sub(
-        r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*',
-        'LINK', text, flags=re.MULTILINE
+        r"\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*",
+        "LINK", text, flags=re.MULTILINE
     )
+
+
+def load_and_merge_data(args) -> pd.DataFrame:
+    """
+    Load merged_clean_data.csv (article_id, body, label_bias) and join it
+    with BABE (outlet, topic, type, news_link). Articles not in BABE get
+    None for the metadata columns.
+    """
+    print(f"--- Reading {args.input_csv} ---")
+    df_main = pd.read_csv(args.input_csv).dropna(subset=[args.id_column, args.text_column])
+    df_main[args.id_column] = df_main[args.id_column].astype(str)
+    print(f"  {len(df_main):,} valid articles in main CSV")
+
+    if os.path.exists(args.babe_csv):
+        print(f"--- Reading BABE metadata from {args.babe_csv} ---")
+        df_babe = pd.read_csv(args.babe_csv, sep=";", on_bad_lines="skip")
+        df_babe["article_id"] = df_babe["article_id"].astype(str)
+        # Keep only the metadata columns we want
+        babe_meta = df_babe[["article_id", "outlet", "topic", "type", "news_link"]].drop_duplicates("article_id")
+        df_main = df_main.merge(babe_meta, on="article_id", how="left")
+        matched = df_main["outlet"].notna().sum()
+        print(f"  {matched:,} articles matched with BABE metadata ({len(df_main) - matched:,} will have NULL outlet/topic/type)")
+    else:
+        print(f"WARNING: BABE CSV not found at {args.babe_csv}. Metadata columns will be NULL.")
+        df_main["outlet"] = None
+        df_main["topic"]  = None
+        df_main["type"]   = None
+        df_main["news_link"] = None
+
+    return df_main
+
+
+def upsert_batch(cur, df_batch: pd.DataFrame, embeddings: np.ndarray, emotions: np.ndarray, id_col: str, text_col: str):
+    """
+    Upsert one batch into both tables.
+    Articles are inserted first (ON CONFLICT DO NOTHING so we never overwrite
+    hand-edited metadata), then embeddings are upserted (they CAN change on retrain).
+    """
+    # --- articles table ---
+    article_rows = [
+        (
+            str(row[id_col]),
+            row.get(text_col, None),
+            row.get("outlet", None),
+            row.get("topic", None),
+            row.get("type", None),
+            row.get("label_bias", None),
+            row.get("news_link", None),
+        )
+        for _, row in df_batch.iterrows()
+    ]
+    psycopg2.extras.execute_values(
+        cur,
+        """
+        INSERT INTO articles (article_id, body, outlet, topic, type, label_bias, news_link)
+        VALUES %s
+        ON CONFLICT (article_id) DO NOTHING
+        """,
+        article_rows,
+    )
+
+    # --- article_embeddings table ---
+    embedding_rows = [
+        (
+            str(row[id_col]),
+            embeddings[i].tolist(),          # Python list → pgvector accepts this
+            emotions[i].tolist(),            # FLOAT4[]
+        )
+        for i, (_, row) in enumerate(df_batch.iterrows())
+    ]
+    psycopg2.extras.execute_values(
+        cur,
+        """
+        INSERT INTO article_embeddings (article_id, embedding, emotion_scores)
+        VALUES %s
+        ON CONFLICT (article_id) DO UPDATE
+            SET embedding      = EXCLUDED.embedding,
+                emotion_scores = EXCLUDED.emotion_scores
+        """,
+        embedding_rows,
+        template="(%s, %s::vector, %s::float4[])",
+    )
+
 
 def main():
     args = get_args()
-    
-    if not os.path.exists(args.input_csv):
-        print(f"ERROR: File not found at {args.input_csv}")
-        return
 
-    # 1. Load Data
-    print(f"--- Reading {args.input_csv} ---")
-    df = pd.read_csv(args.input_csv).dropna(subset=[args.id_column, args.text_column])
-    total_articles = len(df)
-    print(f"Found {total_articles} valid articles.")
+    # 1. Load and merge data
+    df = load_and_merge_data(args)
+    total = len(df)
 
-    # 2. Load Model
+    # 2. Load model
     model, tokenizer = load_model_and_tokenizer(args.model_checkpoint)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print(f"Running on: {device}")
+    print(f"Running inference on: {device}")
 
-    # 3. Setup ChromaDB
-    print(f"--- Initializing Vector DB at {args.db_path} ---")
-    client = chromadb.PersistentClient(path=args.db_path)
-    collection = client.get_or_create_collection(name=args.collection_name, metadata={"hnsw:space": "cosine"})
+    # 3. Connect to Postgres
+    print(f"--- Connecting to PostgreSQL at {args.db_host}:{args.db_port}/{args.db_name} ---")
+    try:
+        conn = get_conn(args)
+    except psycopg2.OperationalError as e:
+        print(f"\nERROR: Could not connect to the database.\n{e}")
+        print("\nRun setup_db.py first, and make sure the Docker container is running:")
+        print("  docker start media-bias-postgres")
+        sys.exit(1)
 
-    # 4. Processing Loop
-    print(f"--- Starting Embedding Process (Batch Size: {args.batch_size}) ---")
-    
-    for start_idx in tqdm(range(0, total_articles, args.batch_size)):
-        end_idx = min(start_idx + args.batch_size, total_articles)
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    # 4. Process in batches
+    print(f"--- Starting embedding process (batch_size={args.batch_size}) ---")
+    for start_idx in tqdm(range(0, total, args.batch_size)):
+        end_idx = min(start_idx + args.batch_size, total)
         batch_df = df.iloc[start_idx:end_idx]
-        
-        ids = batch_df[args.id_column].astype(str).tolist()
+
         texts = [_clean_text(t) for t in batch_df[args.text_column].tolist()]
-        
+
         # Tokenize
         tokenized = tokenizer(
             texts,
             padding=True,
             truncation=True,
             max_length=args.max_length,
-            return_tensors="pt"
+            return_tensors="pt",
         ).to(device)
-        
+
         with torch.no_grad():
-            # Get embeddings via Mean Pooling (MInT)
             outputs = model.model(
-                input_ids=tokenized['input_ids'],
-                attention_mask=tokenized['attention_mask'],
-                output_hidden_states=True
+                input_ids=tokenized["input_ids"],
+                attention_mask=tokenized["attention_mask"],
+                output_hidden_states=True,
             )
-            
-            last_hidden = outputs.hidden_states[-1] 
-            mask = tokenized['attention_mask'].unsqueeze(-1)
+            # Mean pooling over the last hidden state (MInT)
+            last_hidden = outputs.hidden_states[-1]
+            mask = tokenized["attention_mask"].unsqueeze(-1)
             sum_hidden = (last_hidden * mask).sum(dim=1)
             count = mask.sum(dim=1).clamp(min=1e-9)
-            embeddings = (sum_hidden / count).cpu().numpy()
-            
-            # Get Emotion Scores
+            embeddings = (sum_hidden / count).cpu().numpy()   # [B, 768]
+
+            # Emotion scores via the classifier head
             logits_aux = model.classifier(sum_hidden / count)
-            emotions = torch.sigmoid(logits_aux).cpu().numpy()
+            emotions = torch.sigmoid(logits_aux).cpu().numpy()  # [B, 13]
 
-        # Prepare for ChromaDB
-        final_ids = ids
-        final_embeddings = embeddings.tolist()
-        final_metadatas = []
-        
-        for i in range(len(ids)):
-            final_metadatas.append({
-                "emotion_scores": json.dumps(emotions[i].tolist()),
-                "text_snippet": texts[i][:200]
-            })
+        # Write to Postgres
+        upsert_batch(cur, batch_df, embeddings, emotions, args.id_column, args.text_column)
+        conn.commit()
 
-        # Save
-        collection.upsert(
-            ids=final_ids,
-            embeddings=final_embeddings,
-            metadatas=final_metadatas,
-            documents=texts
-        )
+    cur.close()
+    conn.close()
+    print(f"\n--- SUCCESS! {total:,} articles embedded and stored in PostgreSQL ---")
 
-    print(f"\n--- SUCCESS! {total_articles} articles processed and stored in {args.db_path} ---")
 
 if __name__ == "__main__":
     main()

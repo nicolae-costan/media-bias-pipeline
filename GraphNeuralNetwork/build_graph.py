@@ -55,6 +55,18 @@ def get_args():
 
     return parser.parse_args()
 
+def _parse_vector(v) -> list:
+    """
+    pgvector returns VECTOR columns as a string like "[0.1,0.2,...]".
+    psycopg2 does NOT automatically cast them to lists, so we parse manually.
+    If it's already a list (future psycopg3 behaviour), pass through unchanged.
+    """
+    if isinstance(v, (list, np.ndarray)):
+        return v
+    # Strip surrounding brackets and split on commas
+    return [float(x) for x in str(v).strip("[]").split(",")]
+
+
 def load_embeddings(conn_params: dict):
     """
     Returns:
@@ -78,7 +90,8 @@ def load_embeddings(conn_params: dict):
     emotions_list = []
     for row in cur:
         article_ids.append(row["article_id"])
-        embeddings_list.append(row["embedding"])
+        # pgvector returns embedding as a string "[0.1,0.2,...]" — parse it
+        embeddings_list.append(_parse_vector(row["embedding"]))
         emotions_list.append(row["emotion_scores"])
 
     cur.close()

@@ -15,6 +15,7 @@ scikit-learn
 
 # Database
 psycopg2-binary
+pgvector
 
 # Big Data
 pyspark
