@@ -56,7 +56,8 @@ def setup(conn_params: dict):
             topic        TEXT,
             type         TEXT,
             label_bias   TEXT,
-            news_link    TEXT
+            news_link    TEXT,
+            agreement    FLOAT         -- New: stores the consensus confidence
         );
     """)
     print("  [OK] articles table ready")

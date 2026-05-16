@@ -45,9 +45,12 @@ def get_args():
 
     # Input data
     parser.add_argument("--input_csv",  type=str, default="./data/merged_clean_data.csv",
-                        help="CSV with article_id, body, label_bias columns")
+                        help="CSV with article_id, body columns")
     parser.add_argument("--babe_csv",   type=str, default="./data/final_labels_MBIC.csv",
                         help="BABE CSV with outlet, topic, type, news_link metadata")
+    parser.add_argument("--sg1_csv",    type=str, default="./data/raw_labels_SG1.csv")
+    parser.add_argument("--sg2_csv",    type=str, default="./data/raw_labels_SG2.csv")
+    
     parser.add_argument("--text_column", type=str, default="body")
     parser.add_argument("--id_column",   type=str, default="article_id")
 
@@ -113,41 +116,71 @@ def _clean_text(text: str) -> str:
     )
 
 
+def compute_agreement(sg1_path: str, sg2_path: str, id_col: str, label_col: str):
+    """
+    Reconstructs the final labels from raw annotator files (SG1, SG2) 
+    using Majority Voting.
+    """
+    print(f"--- Computing consensus labels from {os.path.basename(sg1_path)} and {os.path.basename(sg2_path)} ---")
+    sg1 = pd.read_csv(sg1_path, sep=';', on_bad_lines='skip')
+    sg2 = pd.read_csv(sg2_path, sep=';', on_bad_lines='skip')
+    
+    all_annotations = pd.concat([sg1, sg2], ignore_index=True)
+    all_annotations[id_col] = all_annotations[id_col].astype(str)
+    
+    records = []
+    for article_id, group in all_annotations.groupby(id_col):
+        counts = group[label_col].value_counts()
+        majority_label = counts.index[0]
+        agreement = counts.iloc[0] / len(group)
+        
+        records.append({
+            "article_id": article_id,
+            "consensus_label": majority_label,
+            "agreement": agreement,
+        })
+        
+    return pd.DataFrame(records)
+
+
 def load_and_merge_data(args) -> pd.DataFrame:
     """
-    Load merged_clean_data.csv (article_id, body, label_bias) and join it
-    with BABE (outlet, topic, type, news_link). Articles not in BABE get
-    None for the metadata columns.
+    1. Load merged_clean_data.csv (article_id, body)
+    2. Join with Consensus labels (Majority Voting from SG1/SG2)
+    3. Join with Metadata (outlet, topic, etc. from BABE)
     """
     print(f"--- Reading {args.input_csv} ---")
     df_main = pd.read_csv(args.input_csv).dropna(subset=[args.id_column, args.text_column])
     df_main[args.id_column] = df_main[args.id_column].astype(str)
-    print(f"  {len(df_main):,} valid articles in main CSV")
+    
+    # Drop existing label column from main if it exists, as we will re-calculate it
+    if "label_bias" in df_main.columns:
+        df_main = df_main.drop(columns=["label_bias"])
 
+    # A. Calculate consensus labels
+    if os.path.exists(args.sg1_csv) and os.path.exists(args.sg2_csv):
+        df_consensus = compute_agreement(args.sg1_csv, args.sg2_csv, "article_id", "label_bias")
+        df_main = df_main.merge(df_consensus, on="article_id", how="left")
+        df_main = df_main.rename(columns={"consensus_label": "label_bias"})
+    else:
+        print("WARNING: SG1 or SG2 files missing. Cannot compute consensus labels.")
+        df_main["label_bias"] = None
+        df_main["agreement"] = 0.0
+
+    # B. Get metadata from BABE
     if os.path.exists(args.babe_csv):
         print(f"--- Reading BABE metadata from {args.babe_csv} ---")
         df_babe = pd.read_csv(args.babe_csv, sep=";", on_bad_lines="skip")
         df_babe["article_id"] = df_babe["article_id"].astype(str)
-        # Keep only the metadata columns we want
         babe_meta = df_babe[["article_id", "outlet", "topic", "type", "news_link"]].drop_duplicates("article_id")
         df_main = df_main.merge(babe_meta, on="article_id", how="left")
-        matched = df_main["outlet"].notna().sum()
-        print(f"  {matched:,} articles matched with BABE metadata ({len(df_main) - matched:,} will have NULL outlet/topic/type)")
-    else:
-        print(f"WARNING: BABE CSV not found at {args.babe_csv}. Metadata columns will be NULL.")
-        df_main["outlet"] = None
-        df_main["topic"]  = None
-        df_main["type"]   = None
-        df_main["news_link"] = None
-
+    
     return df_main
 
 
 def upsert_batch(cur, df_batch: pd.DataFrame, embeddings: np.ndarray, emotions: np.ndarray, id_col: str, text_col: str):
     """
     Upsert one batch into both tables.
-    Articles are inserted first (ON CONFLICT DO NOTHING so we never overwrite
-    hand-edited metadata), then embeddings are upserted (they CAN change on retrain).
     """
     # --- articles table ---
     article_rows = [
@@ -159,15 +192,18 @@ def upsert_batch(cur, df_batch: pd.DataFrame, embeddings: np.ndarray, emotions: 
             row.get("type", None),
             row.get("label_bias", None),
             row.get("news_link", None),
+            float(row.get("agreement", 0.0))
         )
         for _, row in df_batch.iterrows()
     ]
     psycopg2.extras.execute_values(
         cur,
         """
-        INSERT INTO articles (article_id, body, outlet, topic, type, label_bias, news_link)
+        INSERT INTO articles (article_id, body, outlet, topic, type, label_bias, news_link, agreement)
         VALUES %s
-        ON CONFLICT (article_id) DO NOTHING
+        ON CONFLICT (article_id) DO UPDATE 
+            SET label_bias = EXCLUDED.label_bias,
+                agreement  = EXCLUDED.agreement
         """,
         article_rows,
     )
