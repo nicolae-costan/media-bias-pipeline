@@ -146,32 +146,26 @@ Password: mediabias123
 
 ---
 
-## Setting Up on a New Machine (for teammates pulling this branch)
+## Setting Up on a New Machine (Quick Start)
 
-The Docker container does not get committed to Git — it only exists on the machine where it was created. When someone pulls this branch for the first time, they need to run the following commands once:
+The database is managed via Docker Compose. This ensures everyone has the exact same configuration.
 
 ```powershell
-# 1. Pull and start the pgvector container (only needed the very first time)
-docker run -d `
-  --name media-bias-postgres `
-  -e POSTGRES_USER=postgres `
-  -e POSTGRES_PASSWORD=mediabias123 `
-  -e POSTGRES_DB=media_bias `
-  -p 5433:5432 `
-  pgvector/pgvector:pg16
+# 1. Start the database (this will pull the image and setup the container)
+.\start_db.ps1
 
-# 2. Copy the env template and fill in credentials
-# (The defaults already match the docker run command above)
+# 2. Setup your local environment file
 copy GraphNeuralNetwork\.env_copy GraphNeuralNetwork\.env
 
-# 3. Install the Python database packages
-pip install psycopg2-binary pgvector
-
-# 4. Create the schema (tables + indexes)
+# 3. Create the database schema (tables + pgvector index)
 python GraphNeuralNetwork/setup_db.py
 ```
 
-After that, `docker start media-bias-postgres` is all that is needed on subsequent runs (after a reboot, etc.). The data inside the container persists between starts.
+### Manual Docker Commands
+If you prefer not using the script, you can run:
+- **To start**: `docker-compose up -d`
+- **To stop**: `docker-compose down`
+- **To view logs**: `docker-compose logs -f`
 
 ---
 
