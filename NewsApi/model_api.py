@@ -1,9 +1,7 @@
 """
 predict_server.py
 =================
-Clean architecture using FastAPI dependency injection.
-No globals, no ugly module-level state — everything flows
-through typed, injectable dependencies.
+
 
 Start:
     uvicorn predict_server:app --host 0.0.0.0 --port 8000
