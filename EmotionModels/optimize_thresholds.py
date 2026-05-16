@@ -1,137 +1,199 @@
+"""
+optimize_thresholds.py
+----------------------
+Post-training step: run once after training finishes.
+
+For each of the N emotion classes, grid-searches the decision threshold that
+maximises the per-class Jaccard score on the validation set, then writes the
+best thresholds to thresholds.json.
+
+Usage (from inside EmotionModels/):
+    python optimize_thresholds.py --checkpoint <path/to/checkpoint.ckpt>
+
+The script auto-resolves the dev CSV from the checkpoint's saved hparams, so
+you don't need to pass it manually unless you want to override it.
+"""
+
 import os
+import sys
 import json
-import torch
+import argparse
 import numpy as np
-import pandas as pd
+import torch
 from tqdm import tqdm
-from sklearn.metrics import jaccard_score
+from sklearn.metrics import jaccard_score, f1_score, classification_report
 from torch.utils.data import DataLoader
+
+# ── resolve imports whether run from project root or EmotionModels/ ─────────
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+
 from model import EmotionModel
-from dataloader import sentiment_analysis_dataset, MyCollator
+from dataloader import RedditDataset, sentiment_analysis_dataset, MyCollator
 
-def optimize_thresholds(checkpoint_path, dev_csv, output_json="EmotionModels/thresholds.json"):
-    print(f"--- Loading model from: {checkpoint_path} ---")
-    
-    # 1. Load Model
-    # We load the checkpoint manually first to get the saved hparams
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    hparams = checkpoint.get("hyper_parameters", {})
-    
-    # Instantiate model with the saved hparams
-    model = EmotionModel.load_from_checkpoint(checkpoint_path, hparams=hparams, strict=False)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _resolve_path(path: str) -> str:
+    """Try the path as-is, then relative to the script's parent directory."""
+    if os.path.exists(path):
+        return path
+    alt = os.path.normpath(os.path.join(_script_dir, '..', path))
+    if os.path.exists(alt):
+        return alt
+    return path  # let the caller handle missing file
+
+
+def optimize_thresholds(checkpoint_path: str,
+                        output_json: str = "thresholds.json",
+                        dev_csv: str | None = None,
+                        n_thresholds: int = 99):
+    """
+    1. Load model from checkpoint.
+    2. Collect probabilities & targets on the validation set.
+    3. Grid-search per-class thresholds on the first 50 % (calibration).
+    4. Evaluate both baseline (0.5) and tuned thresholds on the second 50 %.
+    5. Write optimal thresholds to *output_json*.
+    """
+    checkpoint_path = _resolve_path(checkpoint_path)
+    print(f"\n{'='*60}")
+    print(f"  Loading checkpoint: {checkpoint_path}")
+    print(f"{'='*60}\n")
+
+    # ── 1. Load model ────────────────────────────────────────────────────────
+    model = EmotionModel.load_from_checkpoint(checkpoint_path, strict=False)
     model.eval()
-    if torch.cuda.is_available():
-        model.cuda()
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
 
-    # 2. Step A: Inference Cache (Collect probs and targets)
-    print("--- Step A: Collecting probabilities and targets from validation set ---")
-    
-    # Setup DataLoader for Dev set
-    model.hparams.dev_csv = dev_csv
+    # Override dev CSV if explicitly requested
+    if dev_csv is not None:
+        model.hparams.dev_csv = dev_csv
+
+    emotions = RedditDataset.EMOTION_COLUMNS
+    num_emotions = len(emotions)
+    print(f"  Emotion classes ({num_emotions}): {emotions}\n")
+
+    # ── 2. Collect probabilities ─────────────────────────────────────────────
+    print("Step A — Collecting probabilities on validation set …")
     dataset = sentiment_analysis_dataset(model.hparams, train=False, val=True, test=False)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=model.hparams.batch_size, 
-        collate_fn=model.prepare_sample,
-        num_workers=0 # Keep it simple for caching
-    )
+    collator = MyCollator(model.hparams.encoder_model, model.hparams.max_length)
+    loader = DataLoader(dataset, batch_size=model.hparams.batch_size,
+                        collate_fn=collator, num_workers=0)
 
-    all_probs = []
-    all_targets = []
-
+    all_probs, all_targets = [], []
     with torch.no_grad():
-        for batch in tqdm(dataloader):
-            inputs, targets = batch
+        for inputs, targets in tqdm(loader, desc="  inference"):
             input_ids, attention_mask = model._safe_squeeze(inputs)
-            if torch.cuda.is_available():
-                input_ids = input_ids.cuda()
-                attention_mask = attention_mask.cuda()
+            input_ids = input_ids.to(device)
+            attention_mask = attention_mask.to(device)
 
-            logits_28 = model.forward(input_ids, attention_mask)
-            probs_28 = torch.sigmoid(logits_28)
-            
-            # Expand targets_13 to targets_28 using the model's mapping
-            targets_13 = targets['labels_aux']
-            if torch.cuda.is_available():
-                targets_13 = targets_13.cuda()
-            
-            targets_28 = targets_13[:, model.mapping]
+            logits = model.forward(input_ids, attention_mask)
+            all_probs.append(torch.sigmoid(logits).cpu().numpy())
+            all_targets.append(targets['labels_aux'].numpy())
 
-            all_probs.append(probs_28.cpu().numpy())
-            all_targets.append(targets_28.cpu().numpy())
+    probs   = np.concatenate(all_probs,   axis=0)   # [N, num_emotions]
+    targets = np.concatenate(all_targets, axis=0)   # [N, num_emotions]
 
-    probs = np.concatenate(all_probs, axis=0)
-    targets = np.concatenate(all_targets, axis=0)
+    # ── 3. 50/50 calibration / internal-test split ──────────────────────────
+    print("\nStep B — Splitting into calibration / internal-test halves …")
+    rng = np.random.default_rng(42)
+    idx = rng.permutation(len(probs))
+    split = len(probs) // 2
+    calib_idx, test_idx = idx[:split], idx[split:]
 
-    # 3. Step B: Data Splitting (50/50 split)
-    print("--- Step B: Splitting data into Calibration and Internal Test ---")
-    n_samples = len(probs)
-    indices = np.arange(n_samples)
-    np.random.seed(42) # For reproducibility
-    np.random.shuffle(indices)
-    
-    split_idx = n_samples // 2
-    calib_indices = indices[:split_idx]
-    test_indices = indices[split_idx:]
-    
-    probs_calib, targets_calib = probs[calib_indices], targets[calib_indices]
-    probs_test, targets_test = probs[test_indices], targets[test_indices]
+    p_cal, t_cal = probs[calib_idx], targets[calib_idx]
+    p_tst, t_tst = probs[test_idx],  targets[test_idx]
 
-    # 4. Step C: Per-Class Grid Search
-    print("--- Step C: Finding optimal thresholds per class ---")
-    best_thresholds = []
-    
-    # There are 28 nodes
-    for i in range(28):
-        best_t = 0.5
-        best_jaccard = -1.0
-        
-        y_true = targets_calib[:, i]
-        y_prob = probs_calib[:, i]
-        
-        # Test 100 thresholds from 0.01 to 0.99
-        for t in np.linspace(0.01, 0.99, 99):
+    # ── 4. Per-class grid search ─────────────────────────────────────────────
+    print(f"\nStep C — Grid-searching {n_thresholds} thresholds per class …\n")
+    thresholds = []
+    header = f"  {'Emotion':<14} {'Best-T':>6}  {'Jaccard':>8}  {'F1':>8}"
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    for i, name in enumerate(emotions):
+        y_true = t_cal[:, i]
+        y_prob = p_cal[:, i]
+
+        best_t, best_j = 0.5, -1.0
+        for t in np.linspace(0.01, 0.99, n_thresholds):
             y_pred = (y_prob > t).astype(float)
-            score = jaccard_score(y_true, y_pred, zero_division=0)
-            
-            if score > best_jaccard:
-                best_jaccard = score
-                best_t = t
-        
-        best_thresholds.append(float(best_t))
-        print(f"Class {i:2}: Best T = {best_t:.2f} | Jaccard = {best_jaccard:.4f}")
+            j = jaccard_score(y_true, y_pred, zero_division=0)
+            if j > best_j:
+                best_j, best_t = j, float(t)
 
-    # 5. Step D: Final Evaluation
-    print("--- Step D: Final Evaluation on Internal Test Set ---")
-    
-    # Baseline (0.5)
-    baseline_preds = (probs_test > 0.5).astype(float)
-    baseline_jaccard = jaccard_score(targets_test, baseline_preds, average="macro", zero_division=0)
-    
-    # Tuned
-    tuned_preds = np.zeros_like(probs_test)
-    for i in range(28):
-        tuned_preds[:, i] = (probs_test[:, i] > best_thresholds[i]).astype(float)
-    
-    tuned_jaccard = jaccard_score(targets_test, tuned_preds, average="macro", zero_division=0)
-    
-    print("\n" + "="*30)
-    print(f"Baseline Macro Jaccard (0.5): {baseline_jaccard:.4f}")
-    print(f"Tuned Macro Jaccard:          {tuned_jaccard:.4f}")
-    print(f"Improvement:                  {tuned_jaccard - baseline_jaccard:.4f}")
-    print("="*30)
+        # Compute F1 at the chosen threshold for display
+        y_pred_best = (y_prob > best_t).astype(float)
+        f1 = f1_score(y_true, y_pred_best, zero_division=0)
 
-    # 6. Export
-    with open(output_json, 'w') as f:
-        json.dump(best_thresholds, f, indent=4)
-    print(f"--- Exported thresholds to {output_json} ---")
+        thresholds.append(best_t)
+        print(f"  {name:<14} {best_t:>6.2f}  {best_j:>8.4f}  {f1:>8.4f}")
+
+    # ── 5. Final evaluation ──────────────────────────────────────────────────
+    print(f"\nStep D — Final evaluation on internal test set …\n")
+
+    # Baseline @ 0.5
+    base_preds = (p_tst > 0.5).astype(float)
+    base_j = jaccard_score(t_tst, base_preds, average="macro", zero_division=0)
+    base_f1 = f1_score(t_tst, base_preds, average="macro", zero_division=0)
+
+    # Tuned thresholds
+    tuned_preds = np.stack(
+        [(p_tst[:, i] > thresholds[i]).astype(float) for i in range(num_emotions)],
+        axis=1
+    )
+    tuned_j = jaccard_score(t_tst, tuned_preds, average="macro", zero_division=0)
+    tuned_f1 = f1_score(t_tst, tuned_preds, average="macro", zero_division=0)
+
+    print(f"  {'':20} {'Jaccard':>8}  {'Macro-F1':>9}")
+    print(f"  {'Baseline (0.5)':20} {base_j:>8.4f}  {base_f1:>9.4f}")
+    print(f"  {'Tuned':20} {tuned_j:>8.4f}  {tuned_f1:>9.4f}")
+    print(f"  {'Improvement':20} {tuned_j - base_j:>+8.4f}  {tuned_f1 - base_f1:>+9.4f}")
+
+    # Per-class report on tuned thresholds
+    print(f"\n  Per-class report (tuned, internal test):\n")
+    print(classification_report(
+        t_tst, tuned_preds,
+        target_names=emotions,
+        zero_division=0,
+        digits=4,
+    ))
+
+    # ── 6. Write thresholds ──────────────────────────────────────────────────
+    out_path = os.path.join(_script_dir, output_json) if not os.path.isabs(output_json) else output_json
+    with open(out_path, "w") as f:
+        json.dump(thresholds, f, indent=4)
+    print(f"\n  ✓ Thresholds saved to: {out_path}\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    CKPT = "tb_logs/emotion_classification/version_4/checkpoints/epoch=3-val_loss=0.0858.ckpt"
-    DEV_CSV = "data/UsVsThem_valid_public.csv"
-    
-    # Check if we are running from project root or EmotionModels folder
-    if not os.path.exists(CKPT) and os.path.exists("../" + CKPT):
-        os.chdir("../") # Move to root
-        
-    optimize_thresholds(CKPT, DEV_CSV)
+    parser = argparse.ArgumentParser(description="Optimise per-class decision thresholds")
+    parser.add_argument(
+        "--checkpoint", "-c", required=True,
+        help="Path to the .ckpt file produced by train.py "
+             "(e.g. tb_logs/emotion_classification/version_3/checkpoints/epoch=2-val_loss=0.0974.ckpt)"
+    )
+    parser.add_argument(
+        "--dev_csv", default=None,
+        help="Override the validation CSV path (default: use the path stored in the checkpoint hparams)"
+    )
+    parser.add_argument(
+        "--output", default="thresholds.json",
+        help="Output JSON file name (relative to EmotionModels/ or absolute). Default: thresholds.json"
+    )
+    parser.add_argument(
+        "--n_thresholds", default=99, type=int,
+        help="Number of threshold candidates to try per class (default: 99)"
+    )
+    args = parser.parse_args()
+
+    optimize_thresholds(
+        checkpoint_path=args.checkpoint,
+        output_json=args.output,
+        dev_csv=args.dev_csv,
+        n_thresholds=args.n_thresholds,
+    )

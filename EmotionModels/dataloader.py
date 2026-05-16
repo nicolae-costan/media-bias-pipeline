@@ -12,9 +12,8 @@ class RedditDataset(Dataset):
     """Reddit Emotion dataset."""
 
     EMOTION_COLUMNS = [
-        'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude',
-        'Guilt', 'Happiness', 'Hope', 'Pride', 'Relief',
-        'Sadness', 'Sympathy', 'Emotions_Neutral'
+        'anger', 'disgust', 'fear', 'joy',
+        'optimism', 'sadness', 'neutral'
     ]
 
     def __init__(self, data_csv='file.csv'):
@@ -23,20 +22,38 @@ class RedditDataset(Dataset):
             data_csv (string): Path to the csv file with annotations.
         """
         if not os.path.exists(data_csv):
-            # Try prepending EmotionModels/ if run from project root
-            alt_path = os.path.join("EmotionModels", data_csv)
+            # Resolve relative to the script's own directory (handles running
+            # from inside EmotionModels/ where "../data/..." is correct)
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            alt_path = os.path.normpath(os.path.join(script_dir, '..', data_csv))
             if os.path.exists(alt_path):
                 data_csv = alt_path
+            else:
+                # Fallback: prepend EmotionModels/ when run from project root
+                alt_path2 = os.path.join("EmotionModels", data_csv)
+                if os.path.exists(alt_path2):
+                    data_csv = alt_path2
 
         self.comments = pd.read_csv(data_csv)
 
         # FIX: Store labels as a numpy float32 array instead of a list-of-lists
         # column on the DataFrame. This avoids per-sample pickle overhead when
         # num_workers > 0 and is faster to index.
+        # Support both 'text' (combined dataset) and legacy 'body' (UsVsThem)
+        text_col = 'text' if 'text' in self.comments.columns else 'body'
+
+        # Drop rows where the text is NaN (some combined-dataset rows are empty)
+        before = len(self.comments)
+        self.comments = self.comments.dropna(subset=[text_col]).reset_index(drop=True)
+        dropped = before - len(self.comments)
+        if dropped:
+            import warnings
+            warnings.warn(f"Dropped {dropped} rows with NaN in '{text_col}' from {data_csv}")
+
         self.labels = self.comments[self.EMOTION_COLUMNS].values.astype(np.float32)
 
         # Keep only the text column in memory — drop unused columns
-        self.texts = self.comments['body'].tolist()
+        self.texts = self.comments[text_col].tolist()
 
     def __len__(self):
         return len(self.texts)
@@ -47,7 +64,7 @@ class RedditDataset(Dataset):
         # when passed across DataLoader worker processes.
         return {
             'body': self.texts[idx],
-            'label_aux': self.labels[idx],   # numpy array, shape [13]
+            'label_aux': self.labels[idx],   # numpy array, shape [num_emotions]
         }
 
 
@@ -64,7 +81,7 @@ class MyCollator(object):
             re.sub(
                 r'\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*',
                 'LINK',
-                item['body'],
+                str(item['body']),   # guard: cast to str in case of residual NaN
                 flags=re.MULTILINE,
             )
             for item in batch
@@ -82,7 +99,7 @@ class MyCollator(object):
 
         # FIX: Stack numpy arrays directly — much faster than building a list
         # of Python lists and letting torch.tensor() parse them.
-        labels = np.stack([item['label_aux'] for item in batch])   # [B, 13]
+        labels = np.stack([item['label_aux'] for item in batch])   # [B, num_emotions]
         output['labels_aux'] = torch.from_numpy(labels)
 
         return tokenized.data, output
