@@ -163,6 +163,115 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
 
 class EmotionModel(pl.LightningModule):
 
+    @torch.no_grad()
+    def predict(self,texts:list,tokenizer,max_length = 512,stride = 50):
+        """
+
+         Args:
+            texts      : list of N cleaned article strings
+            tokenizer  : the tokenizer
+            max_length : chunk size in tokens
+            stride     : overlap between consecutive chunks in tokens
+
+        Returns:
+            list of N dicts, one per article:
+            {
+                "probs":        { "Anger": 0.82, ... },   # raw sigmoid scores (mean over chunks)
+                "predictions":  { "Anger": 1, ... },      # 0/1 using self.thresholds
+                "active":       ["Anger", "Disgust"],      # emotions that fired
+                "chunks": [                                # per-chunk breakdown
+                    {
+                        "chunk_index": 0,
+                        "probs":       { "Anger": 0.91, ... },
+                        "predictions": { "Anger": 1, ... },
+                        "active":      ["Anger"]
+                    },
+                    ...
+                ]
+            }
+        """
+        label_cols = [
+            'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude',
+            'Guilt', 'Happiness', 'Hope', 'Pride', 'Relief',
+            'Sadness', 'Sympathy', 'Emotions_Neutral'
+        ]
+
+        # --- Tokenise with sliding window, no hard truncation ---
+        encoded = tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=max_length,
+            stride=stride,
+            return_overflowing_tokens=True,  # produces multiple chunks per article
+            return_tensors="pt",
+        )
+        # mapping[chunk_idx] = which original article this chunk belongs to
+        mapping = encoded.pop("overflow_to_sample_mapping").numpy()
+
+        # Move tensors to same device as model weights
+        device = self.device
+        input_ids = encoded["input_ids"].to(device)
+        attn_mask = encoded["attention_mask"].to(device)
+
+        # --- Single forward pass covering ALL chunks from ALL articles ---
+        logits = self.forward(input_ids, attn_mask)  # [total_chunks, 13]
+        probs = torch.sigmoid(logits)  # [total_chunks, 13]
+        preds = (probs > self.thresholds).float()  # [total_chunks, 13] — uses tuned thresholds
+
+        probs_np = probs.cpu().numpy()
+        preds_np = preds.cpu().numpy()
+
+        # --- Group chunks back to their original articles ---
+        results = []
+        for article_idx in range(len(texts)):
+            chunk_mask = (mapping == article_idx)
+            chunk_indices = chunk_mask.nonzero()[0]
+
+            # Per-chunk scores — individual section view
+            chunks = []
+            for rank, chunk_row in enumerate(chunk_indices):
+                chunk_probs = {
+                    label: round(float(probs_np[chunk_row, j]), 4)
+                    for j, label in enumerate(label_cols)
+                }
+                chunk_preds = {
+                    label: int(preds_np[chunk_row, j])
+                    for j, label in enumerate(label_cols)
+                }
+                chunks.append({
+                    "chunk_index": rank,
+                    "probs": chunk_probs,
+                    "predictions": chunk_preds,
+                    "active": [l for l, v in chunk_preds.items() if v == 1],
+                })
+
+            # Article-level aggregation across all its chunks
+            # probs → mean  (smooth estimate of intensity over full article)
+            # preds → max   (if ANY chunk triggered the emotion, it counts)
+            chunk_probs_arr = probs_np[chunk_mask]  # [n_chunks, nr_emotion]
+            chunk_preds_arr = preds_np[chunk_mask]  # [n_chunks, nr_emotion]
+
+            article_probs = chunk_probs_arr.mean(axis=0)  # [13]
+            article_preds = chunk_preds_arr.max(axis=0)  # [13]
+
+            article_probs_dict = {
+                label: round(float(article_probs[j]), 4)
+                for j, label in enumerate(label_cols)
+            }
+            article_preds_dict = {
+                label: int(article_preds[j])
+                for j, label in enumerate(label_cols)
+            }
+
+            results.append({
+                "probs": article_probs_dict,
+                "predictions": article_preds_dict,
+                "active": [l for l, v in article_preds_dict.items() if v == 1],
+                "chunks": chunks,
+            })
+
+        return results
 
     def __init__(self, hparams) -> None:
         super(EmotionModel, self).__init__()
