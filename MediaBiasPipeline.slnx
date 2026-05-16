@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/FrontEnd/">
+    <Project Path="FrontEnd/MediaBiasApp/MediaBiasApp.csproj" />
+  </Folder>
+</Solution>
