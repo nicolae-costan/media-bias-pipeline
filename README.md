@@ -35,7 +35,9 @@ News Article
 
 The first stage of the pipeline teaches the system to understand the *tone* and *emotional content* of text. This is crucial because biased language is often characterized by strong, one-sided emotional framing.
 
-### What we built:
+### What we built: 
+We constructed 2 models one that has a task to predict the social group and another that has only the task to predict the emotions from the us vs them dataset
+SentimentClassification is also able to predict the social group but it struggles on sentiment classification so we constructed another model to only predict emotions 
 - Fine-tuned a **BERT** and **RoBERTa** model on a Reddit dataset annotated with "Us vs. Them" bias scores.
 - Used **Multi-Task Learning (MTL)**: the model simultaneously predicts:
   - A **bias score** (continuous float, 0.0–1.0) — how much "Us vs. Them" framing is present.
@@ -63,16 +65,7 @@ Raw text classification has limits — an article's bias is not just a function 
 
 ## Stage 3 — Media Bias Prediction Model
 
-**Location:** `SentimentClassification/` (final prediction layer)
 
-The outputs of Stages 1 and 2 are combined into a final **Media Bias Prediction Model** that produces a unified, interpretable bias score for any given news article.
-
-### What we built:
-- Aggregates the emotion scores, "Us vs. Them" regression output, and GNN-propagated bias signal.
-- Outputs a final **bias label** (e.g., Left / Center / Right, or a continuous bias score).
-- Exposes this model as a **FastAPI REST API** so any client — web, mobile, or desktop — can query it in real time.
-
----
 
 ## Stage 4 — FastAPI Backend + C# MAUI Frontend
 
@@ -88,7 +81,7 @@ The final stage brings everything together in a polished, cross-platform user ex
   - The predicted political leaning.
 - Designed to be lightweight and deployable as a Docker container or cloud function.
 
-### C# MAUI Frontend
+### C# MAUI Frontend (fronte
 - A **cross-platform app** built with .NET MAUI, targeting Windows, Android, and iOS from a single codebase.
 - Integrates with a **News API** to fetch live, real-time news headlines and articles.
 - Users can browse the latest news, select an article, and trigger a bias analysis query against the FastAPI backend.
