@@ -35,6 +35,13 @@ from dotenv import load_dotenv
 env_path = os.path.join(os.path.dirname(__file__), ".env")
 load_dotenv(env_path)
 
+# Add project root to system path to import utils
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from utils import compute_agreement
+
 # Caches so the model is loaded only once
 _model_cache = {}
 _tokenizer_cache = {}
@@ -114,33 +121,6 @@ def _clean_text(text: str) -> str:
         r"\w+:\/{2}[\d\w-]+(\.[\d\w-]+)*(?:(?:\/[^\s/]*))*",
         "LINK", text, flags=re.MULTILINE
     )
-
-
-def compute_agreement(sg1_path: str, sg2_path: str, id_col: str, label_col: str):
-    """
-    Reconstructs the final labels from raw annotator files (SG1, SG2) 
-    using Majority Voting.
-    """
-    print(f"--- Computing consensus labels from {os.path.basename(sg1_path)} and {os.path.basename(sg2_path)} ---")
-    sg1 = pd.read_csv(sg1_path, sep=';', on_bad_lines='skip')
-    sg2 = pd.read_csv(sg2_path, sep=';', on_bad_lines='skip')
-    
-    all_annotations = pd.concat([sg1, sg2], ignore_index=True)
-    all_annotations[id_col] = all_annotations[id_col].astype(str)
-    
-    records = []
-    for article_id, group in all_annotations.groupby(id_col):
-        counts = group[label_col].value_counts()
-        majority_label = counts.index[0]
-        agreement = counts.iloc[0] / len(group)
-        
-        records.append({
-            "article_id": article_id,
-            "consensus_label": majority_label,
-            "agreement": agreement,
-        })
-        
-    return pd.DataFrame(records)
 
 
 def load_and_merge_data(args) -> pd.DataFrame:

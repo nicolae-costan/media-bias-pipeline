@@ -14,6 +14,14 @@ from sklearn.metrics.pairwise import cosine_similarity
 import scipy.sparse as sp
 from tqdm import tqdm
 from dotenv import load_dotenv
+import sys
+
+# Add project root to system path to import utils
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from utils import compute_agreement
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -105,31 +113,6 @@ def load_embeddings(conn_params: dict):
     print(f"[build_graph] Emotion shape   : {emotions.shape}")
 
     return article_ids, embeddings, emotions
-
-def compute_agreement(sg1_path:str, sg2_path:str,id_col,label_col):
-
-    sg1 = pd.read_csv(sg1_path, sep=';', on_bad_lines='skip')
-    sg2 = pd.read_csv(sg2_path, sep=';', on_bad_lines='skip')
-
-    all_anotations = pd.concat([sg1, sg2],ignore_index=True)
-
-    records = []
-
-    for article_id,group in all_anotations.groupby(id_col):
-
-        counts = group[label_col].value_counts()
-        majority_label = counts.index[0]
-        agreement = counts.iloc[0] / len(group)
-
-        records.append({
-
-            "article_id": article_id,
-            "majority_label": majority_label,
-            "agreement": agreement,
-            })
-
-
-    return pd.DataFrame(records)
 
 
 

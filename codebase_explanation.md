@@ -1,17 +1,15 @@
-# Deep Dive: Media Bias Pipeline Explained
+# Deep Dive: Media Bias Analysis Pipeline Explained
 
-This document is a comprehensive, step-by-step explanation of the `media-bias-pipeline` project. It is written from the ground up, assuming zero prior knowledge of machine learning or coding, to help you understand exactly what the code is doing.
+This technical documentation provides a granular breakdown of the `media-bias-pipeline` architecture. It is designed to serve as an academic walkthrough of our machine learning engineering decisions, model pipelines, and system configurations.
 
-## 1. The Big Picture: What is this project trying to do?
-Imagine you are reading a Reddit comment. Sometimes, people write things in a very polarized way: *"We the good people are doing X, while those terrible people are doing Y."* This is known as the **"Us vs. Them" bias**.
+## 1. System Goals and Experimental Framework
 
-The goal of this project is to take a piece of raw text (like a Reddit comment) and train an Artificial Intelligence (AI) to score it on an "Us vs. Them" scale. 
+The objective of this pipeline is to classify and interpret media bias across two distinct domains: professional journalism and user-generated social media content. To achieve this, the pipeline was split into two primary research directions:
 
-To make the AI smarter, the project uses a technique called **Multi-Task Learning**. This means instead of just asking the AI to guess the "Us vs. Them" score (the main task), we also force it to simultaneously guess a secondary, related thing (the auxiliary task), such as:
-1. What emotions are present in the text? (Is it angry? Sad? Joyful?)
-2. What specific group of people is being talked about?
+1.  **The Baseline Experimental Track (`SentimentClassification/`):** A multi-task continuous regression model fine-tuned on Reddit comment datasets. It scores text on a continuous "Us vs. Them" scale (0.0 to 1.0) of ideological polarity.
+2.  **The Relational Graph Track (`GraphNeuralNetwork/`):** A semi-supervised Graph Attention Network (GAT) trained on dense semantic embeddings and emotional probability vectors extracted from news articles.
 
-By forcing the AI to solve two related problems at the exact same time, it learns deeper connections and becomes much more accurate at the main problem.
+By preserving the Reddit regression model as a **baseline comparative reference**, we demonstrate the value of transitioning from simple continuous classifications on social media comments to relational GNN structures mapped over news journalism.
 
 ---
 

@@ -1,38 +1,44 @@
-# Media Bias Analysis Pipeline
+# Media Bias and Semantic Analysis Pipeline
 
-A multi-task learning pipeline for detecting media bias and emotions in news articles and social media text.
+A state-of-the-art multi-stage machine learning pipeline combining **Deep Transformers (BERT/RoBERTa)** and **Graph Attention Networks (GAT)** to analyze, classify, and interpret media bias and emotional signaling in journalism and social media text.
 
-## 🚀 Quick Start (Database)
+---
 
-To get the PostgreSQL + pgvector database running on Windows:
+## 🚀 Quick Start (Database Layer Setup)
 
-1.  **Start Docker Desktop**.
-2.  Run the automated startup script:
-    ```powershell
-    .\start_db.ps1
+The database layer utilizes a containerized **PostgreSQL** deployment configured with the **`pgvector`** extension to handle dense vector storage and high-speed similarity indexing.
+
+1.  **Initialize the database container:**
+    ```bash
+    chmod +x ./start_db.sh
+    ./start_db.sh
     ```
-3.  **Initialize the Schema**:
-    ```powershell
+2.  **Initialize the database schema (Tables, Keys, and HNSW indexes):**
+    ```bash
     python GraphNeuralNetwork/setup_db.py
     ```
 
-## 📂 Project Structure
+---
 
-- **`SentimentClassification/`**: Bias detection in Reddit comments (Us vs Them scale).
-- **`EmotionModels/`**: Emotion classification in news articles (13 emotions).
-- **`GraphNeuralNetwork/`**: GNN-based bias classification using semantic similarity and metadata.
-- **`data/`**: Datasets including BABE and UsVsThem.
+## 📂 Project Architecture Overview
 
-## 📊 Interpretability & Analysis
+*   **`utils/`**: Distributed data preprocessing routines using the **PySpark** engine to resolve consensus annotations (SG1/SG2) via majority voting.
+*   **`GraphNeuralNetwork/`**: Semi-supervised node classification using Graph Attention Networks (GAT) trained on semantic similarity and emotional distributions of news articles.
+*   **`EmotionModels/`**: Fine-tuned multi-label transformer models (using Asymmetric Loss and optimal classification thresholds) to detect emotional signals in media.
+*   **`SentimentClassification/`**: Baseline multi-task continuous regression models (BERT/RoBERTa) trained on Reddit "Us vs Them" data to represent continuous ideological polarity.
 
-To analyze what the models are actually learning (Token Ablation Analysis):
+---
 
-1.  **Emotion Analysis**:
-    ```powershell
+## 📊 Interpretability & Influence Analysis
+
+To analyze the semantic decision boundaries of fine-tuned models, run the token-level ablation (masking) interpreter:
+
+1.  **Extract Word Influences from the Emotion Classifier:**
+    ```bash
     python interpret_models.py --model_type emotion --checkpoint "path/to/emotion.ckpt"
     ```
-2.  **Bias Analysis**:
-    ```powershell
+2.  **Extract Word Influences from the Baseline Bias Classifier:**
+    ```bash
     python interpret_models.py --model_type bias --checkpoint "path/to/bias.ckpt"
     ```
 
@@ -40,6 +46,6 @@ To analyze what the models are actually learning (Token Ablation Analysis):
 
 ## 🛠️ Detailed Documentation
 
-- [**Architecture Overview**](ARCHITECTURE_OVERVIEW.md): How the pieces fit together.
-- [**Database Migration Report**](DATABASE_MIGRATION_REPORT.md): Details on the PostgreSQL + pgvector setup.
-- [**Codebase Deep Dive**](codebase_explanation.md): A step-by-step beginner's guide to the logic.
+*   [**Technical Architecture Overview**](ARCHITECTURE_OVERVIEW.md): Comprehensive system maps and data structures.
+*   [**Database Architecture Migration**](DATABASE_MIGRATION_REPORT.md): Relational pgvector design and schema breakdown.
+*   [**Codebase Deep Dive**](codebase_explanation.md): Step-by-step logic walks through the codebase.

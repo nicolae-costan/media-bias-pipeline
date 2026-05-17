@@ -1,170 +1,103 @@
-# Architecture Overview — Media Bias Pipeline
+# Technical Architecture Overview — Media Bias Pipeline
+
+This document details the software architecture, data models, and machine learning components of the Media Bias Analysis pipeline. 
 
 ---
 
-## What is an Embedding?
+## 1. Core Data Abstractions
 
-An embedding is **not** a score. It is a **dense numerical fingerprint** of the meaning of a piece of text.
+### Dense Text Embeddings
+Embeddings are high-dimensional, continuous representations of text semantics. Raw input sequences are projected into a 768-dimensional vector space using the last hidden states of a pre-trained transformer model (e.g., RoBERTa/BERT). 
 
-When BERT reads the sentence *"Immigrants are invading our country"*, it does not output a single number like `0.8 bias`. Instead, it outputs a **vector of 768 numbers** — e.g. `[0.21, -0.54, 0.87, 0.03, ...]`. These 768 numbers together encode the **semantic meaning** of that sentence in a mathematical space.
+*   **Extraction Method:** Mean pooling (Mean-in-Transformer / MInT pooling) is computed over all non-padding tokens in the sequence, ensuring representation of the entire text context rather than relying solely on the class token (`[CLS]`).
+*   **Vector Dimensions:** 768 floats (FP32).
+*   **Downstream Usage:** The Graph Neural Network (GNN) utilizes cosine similarity metrics between these vectors to establish topological connections (edges) in the KNN semantic graph.
 
-The magic: sentences with **similar meanings end up close together** in that 768-dimensional space, even if they use different words. *"Immigrants are invading"* and *"Foreigners are taking over"* would have very similar embedding vectors. That is what makes them useful for the graph — you connect articles that are semantically similar.
-
-| Term | What it is |
-|---|---|
-| **Embedding** | A vector of 768 floats — the "meaning" of the text in math space |
-| **Emotion scores** | A vector of 13 floats (one per emotion, 0–1 probability) — output of the Emotion Model's head |
-| **Bias score** | A single float (0–1) — output of the Bias Model's regression head |
-
----
-
-## What is BABE?
-
-**BABE = Bias Annotations By Experts.** It is a dataset of ~3,700 news article sentences (not Reddit comments) that were manually annotated by expert journalists and researchers for media bias.
-
-In this project it lives at `GraphNeuralNetwork/data/final_labels_MBIC.csv`. It has the following columns:
-
-| Column | Description |
-|---|---|
-| `text` | The sentence from the news article |
-| `outlet` | e.g. `"foxnews"`, `"nytimes"`, `"thefederalist"` |
-| `topic` | e.g. `"abortion"`, `"immigration"` |
-| `type` | Political leaning: `"left"`, `"right"`, `"center"` |
-| `article` | Full text of the original article |
-| `news_link` | URL of the source article |
-| `label_bias` | **`"Biased"` or `"Non-biased"`** — the ground truth label |
-| `article_id` | A unique hash ID for the article |
-
-BABE is the **labelled dataset for the Graph Neural Network**. The GNN uses these labels to know which articles are biased and which are not, then learns to classify unlabelled ones by looking at their neighbourhood in the graph.
+### Feature Definitions
+*   **Embedding Vector:** A 768-dimensional dense numerical fingerprint representing semantic content.
+*   **Emotion Probability Vector:** A 13-dimensional vector of floats representing the predicted probability (0.0 to 1.0) of 13 granular emotions (Anger, Contempt, Disgust, Fear, Gratitude, Guilt, Happiness, Hope, Pride, Relief, Sadness, Sympathy, Neutral).
+*   **Consensus Label (`label_bias`):** Ground-truth binary classification representing consensus annotator label ("Biased" or "Non-biased"), computed via Majority Voting on raw study groups.
+*   **Certainty Metric (`agreement`):** The ratio of consensus annotations over total annotations per article, serving as a sample confidence weight during GNN training.
 
 ---
 
-## Module Map: What Each Part Does
+## 2. Dataset Glossary
+
+### BABE (Bias Annotations By Experts)
+The core dataset utilized for the Graph Neural Network pipeline, consisting of news article sentences labeled by expert journalists.
+*   **Primary Metadata:** Source outlet (e.g., Fox News, NYTimes), topic (e.g., abortion, immigration), political leaning (left/right/center), and source links.
+*   **Raw Annotations (SG1 & SG2):** Separate study group labels representing the individual judgments of multiple annotators, used to compute majority vote consensus labels and agreement confidence metrics.
+
+---
+
+## 3. Modular System Mapping
 
 ```
 media-bias-pipeline/
-├── SentimentClassification/   ← BIAS MODEL (Reddit, Us-vs-Them scoring)
-│   ├── RedditTransformer.py   (BERT neural network architecture)
-│   ├── BertRegression.py      (BERT training harness — PyTorch Lightning)
-│   ├── RoBERTaMTL.py          (RoBERTa architecture — more advanced, 3-branch MTL)
-│   ├── RoBERTaRegression.py   (RoBERTa training harness)
-│   ├── train.py               (entry point: parse args, build Trainer, call fit)
-│   └── test.py                (load checkpoint, run on test set, write predictions.csv)
+├── utils/                     ← Shared PySpark and processing routines
+│   └── utils.py               (Consensus computing via PySpark engine)
 │
-├── EmotionModels/             ← EMOTION MODEL (news articles, 13-label classification)
-│   ├── model.py               (EmotionModel class — fine-tuned transformer)
-│   ├── train.py               (training entry point)
-│   ├── test.py                (evaluation + threshold loading)
-│   ├── optimize_thresholds.py (per-class threshold search for best Jaccard score)
-│   ├── dataloader.py          (dataset + collator for emotion labels)
-│   └── visualize_emotions.py  (plots: distribution, heatmap, t-SNE, word clouds)
+├── SentimentClassification/   ← Baseline Multi-Task Bias Regression (Reddit Track)
+│   ├── RedditTransformer.py   (Custom dual-head BERT architecture)
+│   ├── BertRegression.py      (PyTorch Lightning regression model)
+│   ├── RoBERTaMTL.py          (Multi-Task Learning architecture with 3-branch split)
+│   ├── RoBERTaRegression.py   (RoBERTa regression training harness)
+│   ├── train.py               (Training entry point)
+│   └── test.py                (Evaluation entry point, outputs predictions.csv)
 │
-└── GraphNeuralNetwork/        ← GNN (uses output of both models above)
-    ├── article_embeddings.py  (runs Emotion Model → extracts embeddings → stores them)
-    ├── build_graph.py         (builds k-NN graph from embeddings, reads BABE labels)
-    ├── GraphModel.py          (Graph Attention Network architecture)
-    ├── train.py               (trains the GAT on labelled nodes)
-    └── test.py                (evaluates GAT on test nodes)
+├── EmotionModels/             ← Emotion Classifier (News Track)
+│   ├── model.py               (Asymmetric Loss fine-tuned Transformer)
+│   ├── train.py               (Training entry point)
+│   ├── test.py                (Evaluation + threshold inference)
+│   ├── optimize_thresholds.py (Per-class F1/Jaccard threshold optimization)
+│   └── dataloader.py          (Dataset and collator for multi-label data)
+│
+└── GraphNeuralNetwork/        ← Semi-Supervised Graph Attention Network (GAT)
+    ├── article_embeddings.py  (Extracts embeddings & emotion features → stores in PG)
+    ├── build_graph.py         (Constructs k-NN GNN graph with agreement filtering)
+    ├── GraphModel.py          (GAT neural network layers)
+    ├── train.py               (Trains GAT classifier using node masking)
+    └── test.py                (Evaluates GAT performance on testing partitions)
 ```
 
 ---
 
-## The Three Models Explained
+## 4. Machine Learning Components
 
-### 1. The Bias Model (`SentimentClassification/`)
+### A. The Baseline Bias Model (`SentimentClassification/`)
+*   **Target Task:** Social media bias classification on Reddit text.
+*   **Loss / Objective:** Mean Squared Error (MSE) regression over continuous "Us vs. Them" scale (0.0 to 1.0) along with multi-task aux heads.
+*   **Architecture:** Multi-Task Transformer (BERT/RoBERTa) with shared lower-level representations and branched task-specific classification heads.
+*   **Context in Project:** Serves as a **standalone experimental track and baseline reference**. It was developed to explore continuous regression and multi-task learning structures on social media text before the pipeline transitioned to relational GNN structures on news data.
 
-- **Input**: A Reddit comment (raw text)
-- **Output**: A float 0–1 called `usVSthem_scale` — how "Us vs. Them" the comment is
-- **Architecture**: BERT or RoBERTa. The last transformer layer is **forked into two branches**: one specialises in the bias regression, the other in an auxiliary task (emotions or social group). This is multi-task learning.
-- **Dataset**: `UsVsThem_train/valid/test_public.csv` — Reddit comments labelled by humans on a 0–1 scale
-- **Role in the pipeline**: Standalone model. Its output is a score for Reddit text. It does not feed into the GNN.
+### B. The Emotion Model (`EmotionModels/`)
+*   **Target Task:** Granular emotion classification on news media text (13 labels).
+*   **Loss / Objective:** Asymmetric Loss (ASL) to dynamically down-weight the loss contributions of negative samples in extremely imbalanced multi-label environments.
+*   **Architecture:** Fine-tuned Transformer using MInT pooling and class-specific optimal thresholds.
+*   **Role in Pipeline:** The trained checkpoint is utilized to generate the node features for the GNN. The BERT/RoBERTa body extracts the semantic embedding, and the classification head outputs the emotional distributions which are stored in the database.
 
-### 2. The Emotion Model (`EmotionModels/`)
-
-- **Input**: A news article sentence
-- **Output**: 13 probability scores (Anger, Contempt, Disgust, Fear, Gratitude, Guilt, Happiness, Hope, Pride, Relief, Sadness, Sympathy, Neutral)
-- **Architecture**: A transformer fine-tuned using Asymmetric Loss (to handle extreme class imbalance) with per-class threshold optimisation. Uses **Mean Pooling** (MInT) over all tokens instead of only the `[CLS]` token.
-- **Dataset**: BABE/MBIC data with emotion labels
-- **Role in the pipeline**: Its trained checkpoint is **loaded by `article_embeddings.py`**. That script passes each of the 13,697 articles through this model to extract both the 768-dim embedding (from the encoder's last hidden state) and the 13 emotion scores. These are then stored in the database.
-
-### 3. The Graph Neural Network (`GraphNeuralNetwork/`)
-
-- **Input**: The embeddings + emotion scores produced by the Emotion Model; the bias labels from BABE
-- **Output**: A `Biased` / `Non-biased` prediction for each article node in the graph
-- **Architecture**: Graph Attention Network (GAT). Nodes = articles. Edges = pairs of articles with cosine similarity above a threshold. Edge weights are blended from embedding similarity (80%) and emotion similarity (20%).
-- **Dataset**: BABE for labels; `merged_clean_data.csv` for the full 13k article pool
-- **Role in the pipeline**: The final classification stage for news articles. It leverages the graph structure — an article surrounded by many biased neighbours is more likely to be biased itself.
+### C. Graph Attention Network (`GraphNeuralNetwork/`)
+*   **Target Task:** Semi-supervised binary classification ("Biased" / "Non-biased") of news articles.
+*   **Architecture:** Graph Attention Network (GAT) using multi-head attention over node features.
+*   **Graph Structure:** Node features consist of the 768-dim semantic embedding concatenated with the 13-dim emotion vector. Edges are generated dynamically using K-Nearest Neighbors based on cosine similarity, filtered by annotator agreement thresholds.
 
 ---
 
-## The Full Pipeline, End to End
+## 5. Unified Processing Pipeline
 
 ```
-Step 1 — Train Emotion Model
-  EmotionModels/train.py
-  → Fine-tunes a transformer on BABE emotion labels
-  → Saves a checkpoint: tb_logs/emotion_classification/version_N/checkpoints/*.ckpt
+Phase 1: Feature Extraction & Preprocessing
+  [Raw CSVs] ──> [utils/utils.py (PySpark Engine)] ──> [Consensus Labels + Agreement]
+  [News Texts] ──> [Emotion Classifier Checkpoint] ──> [768-dim Vectors + 13-dim Emotion Scores]
+                          │
+                          ▼
+             [PostgreSQL + pgvector Database]
 
-Step 2 — Generate Embeddings
-  GraphNeuralNetwork/article_embeddings.py  (originally via PySpark)
-  → Loads the Emotion Model checkpoint
-  → Reads merged_clean_data.csv (13,697 articles)
-  → For each article:
-      - Runs BERT encoder → 768-dim embedding (mean pooling over last hidden state)
-      - Runs classifier head → 13 emotion probability scores
-  → Stores (article_id, embedding[768], emotion_scores[13]) in the database
-     Originally: PostgreSQL with pgvector
-     Current branch: ChromaDB in ./vector_db/
+Phase 2: Topological Graph Generation
+  [Database] ──> [build_graph.py] ──> [KNN Cosine Graph + Annotator Confidence Masking] ──> [graph.pt]
 
-Step 3 — Build the Graph
-  GraphNeuralNetwork/build_graph.py
-  → Reads all embeddings from the database
-  → Reads BABE labels (Biased / Non-biased) from final_labels_MBIC.csv
-  → Computes annotator agreement from SG1/SG2 CSVs → decides train/val/test masks
-  → Builds k-NN graph:
-      - For each article, find top-K most similar neighbours (cosine similarity)
-      - If similarity ≥ threshold → add edge
-      - Adjust edge weight: +bonus if same label, −penalty if different label
-  → Saves graph.pt (PyTorch Geometric Data object)
-
-Step 4 — Train the GNN
-  GraphNeuralNetwork/train.py
-  → Loads graph.pt
-  → Trains Graph Attention Network on nodes where train_mask=True (high annotator agreement)
-  → Validates on val_mask nodes, tests on test_mask nodes
-  → Uses message-passing: each node aggregates information from its neighbours
-
-Step 5 — Bias Model (separate track, independent of GNN)
-  SentimentClassification/train.py
-  → Trains BERT or RoBERTa on Reddit UsVsThem data
-  → Outputs a continuous 0–1 bias score for any Reddit comment
-  → Evaluated on test.py → writes predictions.csv
+Phase 3: GAT Model Training & Evaluation
+  [graph.pt] ──> [GraphNeuralNetwork/train.py] ──> [GAT Binary Bias Predictor]
 ```
 
----
-
-## Why Does `SentimentClassification` Exist If the GNN Doesn't Use It?
-
-`SentimentClassification/` is the **original, standalone project**. The GNN was added later as a new research direction. They currently run on completely different data and **do not connect to each other**.
-
-| | SentimentClassification | GraphNeuralNetwork |
-|---|---|---|
-| **Data source** | Reddit comments | News articles (BABE) |
-| **What it labels** | User-generated social media text | Professional journalism |
-| **Label type** | Continuous 0–1 "Us vs Them" scale | Binary: Biased / Non-biased |
-| **Label origin** | Crowd-sourced human annotation | Expert journalist annotation |
-| **Output use** | `predictions.csv` | Graph node labels |
-
-They tackle **two different definitions of "bias"** on **two different kinds of text**.
-
-`SentimentClassification` was the first thing built — the EmotionModel and GNN were added on top as a new direction. It remains a working, independent model for scoring Reddit comments for polarised "us vs them" language.
-
-### Could they be connected in the future?
-
-Yes, theoretically. A few ways this could work:
-
-1. **Reddit comments linked to news articles** → run `SentimentClassification` on those comments and use the scores as additional node features in the graph.
-2. **Cross-signal** → "this news article generated highly polarised Reddit comments → extra evidence of bias".
-3. **Ensemble** → an article is more likely biased if both the GNN *and* the `SentimentClassification` model agree.
-
-None of this integration is implemented yet. Right now they are genuinely parallel tracks.
+This multi-stage architecture leverages the representational power of Transformers for dense feature extraction, the distributed efficiency of PySpark for clean data wrangling, and the relational power of Graph Attention Networks to map structural media patterns.
