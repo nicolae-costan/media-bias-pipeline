@@ -31,6 +31,10 @@ pyspark
 python-dotenv
 tqdm
 test-tube
+fastapi
+uvicorn[standard]
+httpx
+pydantic-settings
 
 # ---- Visualization & Interpretability --------------------------------------
 matplotlib
