@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from argparse import Namespace
 
 import pandas as pd
 import torch
@@ -11,6 +12,19 @@ if GRAPH_DIR not in sys.path:
     sys.path.insert(0, GRAPH_DIR)
 
 from GraphModel import GraphBiasLabels
+
+
+def _load_graph_model(checkpoint_path: str, graph, graph_path: str):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    hparams = dict(checkpoint.get("hyper_parameters", {}))
+    hparams["cls_input_dim"] = graph.x.shape[1]
+    hparams["emo_input_dim"] = graph.emotions.shape[1]
+
+    hparams["graph_path"] = graph_path
+
+    model = GraphBiasLabels(Namespace(**hparams))
+    model.load_state_dict(checkpoint["state_dict"], strict=False)
+    return model
 
 
 def _read_babe_ids(path: str) -> set[str]:
@@ -36,7 +50,7 @@ def main():
         raise FileNotFoundError(f"Checkpoint not found: {args.checkpoint}")
 
     graph = torch.load(args.graph_path, weights_only=False)
-    model = GraphBiasLabels.load_from_checkpoint(args.checkpoint, strict=False)
+    model = _load_graph_model(args.checkpoint, graph, args.graph_path)
     model.eval()
 
     logits = model(graph.x, graph.emotions, graph.edge_index)
