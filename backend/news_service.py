@@ -1,8 +1,55 @@
+import asyncio
+import re
+from html.parser import HTMLParser
+
 import httpx
 from fastapi import HTTPException, status
 
 from backend.config import Settings
 from backend.schemas import NewsArticle, NewsSearchRequest, NewsSearchResponse
+
+
+TRUNCATION_RE = re.compile(r"\s*\[\+\d+\s+chars\]\s*$")
+WHITESPACE_RE = re.compile(r"\s+")
+
+
+class ArticleTextExtractor(HTMLParser):
+    TEXT_TAGS = {"article", "main", "p", "h1", "h2", "h3", "li", "blockquote"}
+    SKIP_TAGS = {"script", "style", "noscript", "svg", "canvas", "nav", "footer", "form"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._text_depth = 0
+        self._chunks: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self.SKIP_TAGS:
+            self._skip_depth += 1
+        if tag in self.TEXT_TAGS:
+            self._text_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.TEXT_TAGS and self._text_depth:
+            self._text_depth -= 1
+            self._chunks.append("\n")
+        if tag in self.SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth or not self._text_depth:
+            return
+        text = WHITESPACE_RE.sub(" ", data).strip()
+        if text:
+            self._chunks.append(f"{text} ")
+
+    def text(self) -> str:
+        lines = []
+        for line in "".join(self._chunks).splitlines():
+            clean_line = WHITESPACE_RE.sub(" ", line).strip()
+            if clean_line:
+                lines.append(clean_line)
+        return "\n\n".join(lines)
 
 
 class NewsService:
@@ -50,12 +97,51 @@ class NewsService:
                 detail=payload.get("message", "NewsAPI returned an error response."),
             )
 
-        articles = [
-            self._normalize_article(article)
-            for article in payload.get("articles", [])
-            if article.get("url")
-        ]
+        raw_articles = [article for article in payload.get("articles", []) if article.get("url")]
+        articles = await self._normalize_articles(raw_articles[:10])
         return NewsSearchResponse(total_results=int(payload.get("totalResults", 0)), articles=articles[:10])
+
+    async def _normalize_articles(self, articles: list[dict]) -> list[NewsArticle]:
+        if not self.settings.news_fetch_full_content:
+            return [self._normalize_article(article) for article in articles]
+
+        headers = {"User-Agent": self.settings.news_article_user_agent}
+        timeout = httpx.Timeout(self.settings.news_article_timeout_seconds)
+        async with httpx.AsyncClient(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            full_texts = await asyncio.gather(
+                *(self._fetch_article_text(client, article["url"]) for article in articles),
+                return_exceptions=True,
+            )
+
+        normalized = []
+        for article, full_text in zip(articles, full_texts, strict=True):
+            content = full_text if isinstance(full_text, str) and full_text else None
+            normalized.append(self._normalize_article(article, content_override=content))
+        return normalized
+
+    async def _fetch_article_text(self, client: httpx.AsyncClient, url: str) -> str | None:
+        try:
+            response = await client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return None
+
+        content_type = response.headers.get("content-type", "")
+        if "html" not in content_type.lower():
+            return None
+
+        extractor = ArticleTextExtractor()
+        try:
+            extractor.feed(response.text)
+        except Exception:
+            return None
+
+        text = clean_article_content(extractor.text())
+        if len(text) < 500:
+            return None
+        if self.settings.news_article_max_chars > 0:
+            return text[: self.settings.news_article_max_chars]
+        return text
 
     @staticmethod
     def _news_error_detail(response: httpx.Response) -> str:
@@ -66,7 +152,7 @@ class NewsService:
         return payload.get("message") or payload.get("code") or "NewsAPI returned an HTTP error."
 
     @staticmethod
-    def _normalize_article(article: dict) -> NewsArticle:
+    def _normalize_article(article: dict, content_override: str | None = None) -> NewsArticle:
         source = article.get("source") or {}
         return NewsArticle(
             source_id=source.get("id"),
@@ -77,7 +163,7 @@ class NewsService:
             url=article.get("url"),
             url_to_image=article.get("urlToImage"),
             published_at=article.get("publishedAt"),
-            content=article.get("content"),
+            content=content_override or clean_article_content(article.get("content")),
         )
 
 
@@ -85,3 +171,10 @@ def article_analysis_text(article: NewsArticle) -> str:
     parts = [article.title, article.description, article.content]
     return "\n\n".join(part for part in parts if part)
 
+
+def clean_article_content(content: str | None) -> str | None:
+    if not content:
+        return None
+    content = TRUNCATION_RE.sub("", content)
+    content = WHITESPACE_RE.sub(" ", content).strip()
+    return content or None

@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import pandas as pd
 import torch
@@ -10,8 +11,22 @@ LABEL_TO_ID = {"Non-biased": 0, "Biased": 1}
 ID_TO_LABEL = {v: k for k, v in LABEL_TO_ID.items()}
 
 
+def _resolve_csv_path(csv_path: str) -> str:
+    path = Path(csv_path)
+    if path.exists():
+        return str(path)
+
+    project_root = Path(__file__).resolve().parents[1]
+    root_path = project_root / csv_path
+    if root_path.exists():
+        return str(root_path)
+
+    raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+
 class BiasDataset(Dataset):
     def __init__(self, csv_path: str):
+        csv_path = _resolve_csv_path(csv_path)
         self.df = pd.read_csv(csv_path)
         self.df = self.df.dropna(subset=["body", "label"]).reset_index(drop=True)
         self.df["label"] = self.df["label"].map(LABEL_TO_ID).astype(int)

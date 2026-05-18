@@ -134,7 +134,12 @@ def main():
     parser.add_argument("--babe_csv", default="data/final_labels_MBIC.csv")
     parser.add_argument("--graph_predictions_csv", default=None)
     parser.add_argument("--output_dir", default="data/bias_transformer")
-    parser.add_argument("--pseudo_min_confidence", type=float, default=0.90)
+    parser.add_argument(
+        "--pseudo_min_confidence",
+        type=float,
+        default=0.0,
+        help="Optional second confidence filter for graph pseudo-labels. Defaults to 0 because graph_pseudo_labels.py already filters them.",
+    )
     parser.add_argument("--train_size", type=float, default=0.70)
     parser.add_argument("--valid_size", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=42)

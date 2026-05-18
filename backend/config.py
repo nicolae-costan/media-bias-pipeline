@@ -18,13 +18,19 @@ class Settings(BaseSettings):
     model_device: Literal["auto", "cpu", "cuda"] = "auto"
     max_text_chars: int = 20_000
     max_batch_size: int = 10
+    long_text_chunk_chars: int = 2_500
 
     news_api_key: str | None = None
     news_api_base_url: str = "https://newsapi.org/v2"
     news_api_timeout_seconds: float = 10.0
+    news_fetch_full_content: bool = True
+    news_article_timeout_seconds: float = 8.0
+    news_article_max_chars: int = 0
+    news_article_user_agent: str = (
+        "Mozilla/5.0 (compatible; MediaBiasPipeline/1.0; +https://localhost)"
+    )
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

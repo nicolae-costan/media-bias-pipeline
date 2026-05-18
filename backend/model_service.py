@@ -69,6 +69,99 @@ def _sentence_spans(text: str) -> list[tuple[int, int, str]]:
     return spans
 
 
+def split_text_for_analysis(text: str, max_chars: int) -> list[tuple[int, str]]:
+    text = text.strip()
+    if not text:
+        return []
+
+    max_chars = max(500, max_chars)
+    spans = _sentence_spans(text)
+    if not spans:
+        return [(start, text[start : start + max_chars]) for start in range(0, len(text), max_chars)]
+
+    chunks: list[tuple[int, str]] = []
+    chunk_start: int | None = None
+    chunk_end: int | None = None
+    chunk_parts: list[str] = []
+
+    for start, end, sentence in spans:
+        if len(sentence) > max_chars:
+            if chunk_parts and chunk_start is not None:
+                chunks.append((chunk_start, text[chunk_start : chunk_end].strip()))
+                chunk_parts = []
+                chunk_start = None
+                chunk_end = None
+            sentence_offset = start
+            while sentence_offset < end:
+                piece_end = min(sentence_offset + max_chars, end)
+                chunks.append((sentence_offset, text[sentence_offset:piece_end].strip()))
+                sentence_offset = piece_end
+            continue
+
+        candidate_length = end - chunk_start if chunk_start is not None else len(sentence)
+        if chunk_parts and candidate_length > max_chars and chunk_start is not None and chunk_end is not None:
+            chunks.append((chunk_start, text[chunk_start:chunk_end].strip()))
+            chunk_parts = []
+            chunk_start = None
+            chunk_end = None
+
+        if chunk_start is None:
+            chunk_start = start
+        chunk_end = end
+        chunk_parts.append(sentence)
+
+    if chunk_parts and chunk_start is not None and chunk_end is not None:
+        chunks.append((chunk_start, text[chunk_start:chunk_end].strip()))
+
+    return [(start, chunk) for start, chunk in chunks if chunk]
+
+
+def aggregate_chunk_analyses(
+    chunks: list[tuple[int, str]],
+    analyses: list[AnalyzeResponse],
+    max_spans: int,
+) -> AnalyzeResponse:
+    total_weight = sum(max(len(chunk_text), 1) for _, chunk_text in chunks)
+    if total_weight <= 0:
+        total_weight = len(chunks) or 1
+
+    prob_biased = 0.0
+    emotions = {label: 0.0 for label in EMOTION_LABELS}
+    spans: list[BiasedSpan] = []
+
+    for (offset, chunk_text), analysis in zip(chunks, analyses, strict=True):
+        weight = max(len(chunk_text), 1) / total_weight
+        prob_biased += analysis.bias.prob_biased * weight
+        for label in EMOTION_LABELS:
+            emotions[label] += analysis.emotions.get(label, 0.0) * weight
+        for span in analysis.biased_spans:
+            spans.append(
+                BiasedSpan(
+                    start=offset + span.start,
+                    end=offset + span.end,
+                    text=span.text,
+                    bias_delta=span.bias_delta,
+                )
+            )
+
+    prob_biased = min(max(prob_biased, 0.0), 1.0)
+    prob_unbiased = 1.0 - prob_biased
+    label = "Biased" if prob_biased >= prob_unbiased else "Non-biased"
+    spans.sort(key=lambda item: item.bias_delta, reverse=True)
+
+    return AnalyzeResponse(
+        bias=BiasPrediction(
+            label=label,
+            prob_biased=float(prob_biased),
+            prob_unbiased=float(prob_unbiased),
+            confidence=float(max(prob_biased, prob_unbiased)),
+        ),
+        sentiment=ModelService._sentiment_from_emotions(emotions),
+        emotions={label: float(value) for label, value in emotions.items()},
+        biased_spans=spans[:max_spans],
+    )
+
+
 class ModelService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -172,6 +265,30 @@ class ModelService:
             )
         return results
 
+    def analyze_long_text(
+        self,
+        text: str,
+        include_biased_spans: bool,
+        max_spans: int,
+    ) -> AnalyzeResponse:
+        chunks = split_text_for_analysis(text, self.settings.long_text_chunk_chars)
+        if not chunks:
+            return self.analyze_many([text], include_biased_spans=include_biased_spans, max_spans=max_spans)[0]
+
+        chunk_texts = [chunk_text for _, chunk_text in chunks]
+        chunk_results: list[AnalyzeResponse] = []
+        for start in range(0, len(chunk_texts), self.settings.max_batch_size):
+            batch = chunk_texts[start : start + self.settings.max_batch_size]
+            chunk_results.extend(
+                self.analyze_many(
+                    batch,
+                    include_biased_spans=include_biased_spans,
+                    max_spans=max_spans,
+                )
+            )
+
+        return aggregate_chunk_analyses(chunks, chunk_results, max_spans)
+
     def _validate_loaded(self) -> None:
         missing = []
         if self.bias_model is None or self.bias_tokenizer is None:
@@ -247,7 +364,8 @@ class ModelService:
             for row in probs
         ]
 
-    def _sentiment_from_emotions(self, emotions: dict[str, float]) -> SentimentPrediction:
+    @staticmethod
+    def _sentiment_from_emotions(emotions: dict[str, float]) -> SentimentPrediction:
         positive = emotions.get("joy", 0.0) + emotions.get("optimism", 0.0)
         negative = (
             emotions.get("anger", 0.0)
