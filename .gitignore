@@ -49,3 +49,4 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+vector_db/chroma.sqlite3

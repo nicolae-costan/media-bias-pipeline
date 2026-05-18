@@ -3,3 +3,8 @@ pytorch-lightning
 transformers
 scikit-learn
 test-tube
+matplotlib
+seaborn
+pandas
+tqdm
+wordcloud

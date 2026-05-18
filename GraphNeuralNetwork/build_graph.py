@@ -13,6 +13,14 @@ from sklearn.metrics.pairwise import cosine_similarity
 import scipy.sparse as sp
 from tqdm import tqdm
 from dotenv import load_dotenv
+import sys
+
+# Add project root to system path to import utils
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from utils import compute_agreement
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -54,6 +62,18 @@ def get_args():
 
     return parser.parse_args()
 
+def _parse_vector(v) -> list:
+    """
+    pgvector returns VECTOR columns as a string like "[0.1,0.2,...]".
+    psycopg2 does NOT automatically cast them to lists, so we parse manually.
+    If it's already a list (future psycopg3 behaviour), pass through unchanged.
+    """
+    if isinstance(v, (list, np.ndarray)):
+        return v
+    # Strip surrounding brackets and split on commas
+    return [float(x) for x in str(v).strip("[]").split(",")]
+
+
 def load_embeddings(conn_params: dict):
     """
     Returns:
@@ -77,7 +97,8 @@ def load_embeddings(conn_params: dict):
     emotions_list = []
     for row in cur:
         article_ids.append(row["article_id"])
-        embeddings_list.append(row["embedding"])
+        # pgvector returns embedding as a string "[0.1,0.2,...]" — parse it
+        embeddings_list.append(_parse_vector(row["embedding"]))
         emotions_list.append(row["emotion_scores"])
 
     cur.close()
@@ -91,31 +112,6 @@ def load_embeddings(conn_params: dict):
     print(f"[build_graph] Emotion shape   : {emotions.shape}")
 
     return article_ids, embeddings, emotions
-
-def compute_agreement(sg1_path:str, sg2_path:str,id_col,label_col):
-
-    sg1 = pd.read_csv(sg1_path, sep=';', on_bad_lines='skip')
-    sg2 = pd.read_csv(sg2_path, sep=';', on_bad_lines='skip')
-
-    all_anotations = pd.concat([sg1, sg2],ignore_index=True)
-
-    records = []
-
-    for article_id,group in all_anotations.groupby(id_col):
-
-        counts = group[label_col].value_counts()
-        majority_label = counts.index[0]
-        agreement = counts.iloc[0] / len(group)
-
-        records.append({
-
-            "article_id": article_id,
-            "majority_label": majority_label,
-            "agreement": agreement,
-            })
-
-
-    return pd.DataFrame(records)
 
 
 

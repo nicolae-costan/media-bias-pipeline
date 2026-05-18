@@ -137,7 +137,7 @@ def compute_weights_from_csv(csv_paths, label_cols, clamp_max=20.0):
 
     if not dfs:
         log.warning("No csv found")
-        raise Exception("No pandas found")
+        raise Exception(f"No pandas found. Tried: {csv_paths}")
 
     df_all = pd.concat(dfs, ignore_index=True)
     total = len(df_all)
