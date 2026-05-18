@@ -366,7 +366,8 @@
         /* Metrics layout */
         .metrics-row {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: minmax(260px, 420px);
+            justify-content: center;
             gap: 1.5rem;
         }
 
@@ -397,10 +398,6 @@
             background: linear-gradient(90deg, var(--accent-secondary), var(--accent-primary));
         }
 
-        .metric-card.gnn::before {
-            background: var(--success-color);
-        }
-
         .metric-lbl {
             font-size: 0.8rem;
             color: var(--text-muted);
@@ -414,6 +411,18 @@
             font-weight: 700;
             color: #fff;
             font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .metric-val.score-biased {
+            color: var(--accent-tertiary);
+        }
+
+        .metric-val.score-unbiased {
+            color: var(--success-color);
+        }
+
+        .metric-val.score-uncertain {
+            color: var(--accent-primary);
         }
 
         .metric-badge {
@@ -437,10 +446,16 @@
             border: 1px solid rgba(0, 255, 135, 0.25);
         }
 
+        .badge-uncertain {
+            background: rgba(217, 167, 82, 0.14);
+            color: var(--accent-primary);
+            border: 1px solid rgba(217, 167, 82, 0.32);
+        }
+
         /* 7 Emotions & Chart section */
         .workspace-body-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr;
             gap: 2.2rem;
         }
 
@@ -517,6 +532,21 @@
             display: flex;
             flex-direction: column;
             gap: 0.6rem;
+        }
+
+        .evidence-layout {
+            display: grid;
+            grid-template-columns: minmax(170px, 0.42fr) minmax(0, 1fr);
+            gap: 1rem;
+            align-items: start;
+        }
+
+        .evidence-layout .ablation-field {
+            min-height: 180px;
+        }
+
+        .evidence-layout .ablation-stats {
+            grid-template-columns: 1fr;
         }
 
         .ablation-header {
@@ -621,30 +651,215 @@
         .hidden {
             display: none !important;
         }
+
+        .status-strip {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 0.8rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .status-pill,
+        .detail-pill {
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            padding: 0.7rem 0.85rem;
+            min-width: 0;
+        }
+
+        .status-label,
+        .detail-label,
+        label.control-label {
+            display: block;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            margin-bottom: 0.25rem;
+        }
+
+        .status-value,
+        .detail-value {
+            color: #fff;
+            font-weight: 600;
+            overflow-wrap: anywhere;
+        }
+
+        .status-ok {
+            color: var(--success-color);
+        }
+
+        .status-bad {
+            color: var(--accent-tertiary);
+        }
+
+        .tabs {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.4rem;
+        }
+
+        .tab-btn {
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-muted);
+            border-radius: 10px;
+            padding: 0.65rem 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .tab-btn.active {
+            color: #0c0e0d;
+            background: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+
+        .control-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.8rem;
+        }
+
+        .control-row.three {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .select-input,
+        .number-input {
+            width: 100%;
+            background: rgba(8, 5, 20, 0.7);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 0.6rem 0.8rem;
+            color: #fff;
+            outline: none;
+            font-size: 0.9rem;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .message-box {
+            background: rgba(255, 255, 255, 0.025);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            line-height: 1.45;
+            padding: 0.85rem;
+        }
+
+        .message-box.error {
+            color: #ffc5c5;
+            border-color: rgba(230, 92, 92, 0.35);
+            background: rgba(230, 92, 92, 0.08);
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.9rem;
+        }
+
+        .article-link {
+            color: var(--accent-secondary);
+            text-decoration: none;
+            overflow-wrap: anywhere;
+        }
+
+        .article-link:hover {
+            text-decoration: underline;
+        }
+
+        .evidence-snippet {
+            display: block;
+            padding: 0.6rem 0;
+        }
+
+        .evidence-snippet + .evidence-snippet {
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .evidence-context {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        @media (max-width: 900px) {
+            .status-strip,
+            .details-grid,
+            .control-row,
+            .control-row.three,
+            .evidence-layout {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
-        <!-- Header -->
         <header>
             <h1>Media Bias & Emotion Pipeline Dashboard</h1>
-            <p class="subtitle">Unified Real-Time Analysis with <span>pgvector</span> and <span>Graph Attention
-                    Networks</span></p>
+            <p class="subtitle">Live FastAPI analysis with <span>bias</span>, <span>emotion</span>, and
+                <span>news</span> models</p>
         </header>
 
-        <!-- Workspace Grid Layout -->
+        <div class="status-strip" id="status-strip">
+            <div class="status-pill">
+                <span class="status-label">API</span>
+                <span class="status-value" id="status-api">Checking</span>
+            </div>
+            <div class="status-pill">
+                <span class="status-label">Bias Model</span>
+                <span class="status-value" id="status-bias">Checking</span>
+            </div>
+            <div class="status-pill">
+                <span class="status-label">Emotion Model</span>
+                <span class="status-value" id="status-emotion">Checking</span>
+            </div>
+            <div class="status-pill">
+                <span class="status-label">News API</span>
+                <span class="status-value" id="status-news">Checking</span>
+            </div>
+            <div class="status-pill">
+                <span class="status-label">Device</span>
+                <span class="status-value" id="status-device">Unknown</span>
+            </div>
+        </div>
+
         <div class="workspace-grid">
-
-            <!-- Left Side: Controls & Search List -->
             <div class="glass-panel sidebar-panel">
-
-                <!-- Section 1: Custom Sandbox Input -->
                 <div>
-                    <h3 class="section-title">Custom Text Analysis</h3>
+                    <h3 class="section-title">Analysis Controls</h3>
+                    <div class="tabs" role="tablist" style="grid-template-columns: repeat(2, 1fr);">
+                        <button class="tab-btn active" data-tab="single">Single</button>
+                        <button class="tab-btn" data-tab="news">News</button>
+                    </div>
+                </div>
+
+                <div id="tab-single" class="tab-panel">
                     <div class="sandbox-group">
-                        <textarea id="sandbox-textarea"
-                            placeholder="Paste custom news or media text to run through the neural network pipeline...">The governor's complete tyranny and absolute propaganda disgust and anger me!</textarea>
+                        <textarea id="sandbox-textarea" placeholder="Paste media text to analyze...">The governor's complete tyranny and absolute propaganda disgust and anger me!</textarea>
+                        <div class="control-row">
+                            <label class="checkbox-row">
+                                <input type="checkbox" id="single-include-spans" checked>
+                                <span>Highlight biased spans</span>
+                            </label>
+                            <div>
+                                <label class="control-label" for="single-max-spans">Max Spans</label>
+                                <input type="number" class="number-input" id="single-max-spans" min="0" max="20" value="5">
+                            </div>
+                        </div>
                         <button class="btn-action" id="btn-analyze-sandbox">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -656,54 +871,82 @@
                     </div>
                 </div>
 
-                <!-- Section 2: Semantic search and list -->
-                <div>
-                    <h3 class="section-title">Correlated News Search</h3>
+                <div id="tab-news" class="tab-panel hidden">
                     <div style="display: flex; flex-direction: column; gap: 0.8rem;">
                         <div class="search-group">
                             <input type="text" class="search-input" id="search-query"
-                                placeholder="Enter keyword (e.g. protest, tyranny, border)..." value="protest">
+                                placeholder="Enter keyword (e.g. election, protest, border)..." value="protest">
                             <button class="btn-action" id="btn-search">
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                                     stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                                     <circle cx="11" cy="11" r="8"></circle>
                                     <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                                 </svg>
-                                <span>Search</span>
+                                <span>Analyze News</span>
                             </button>
                         </div>
 
-                        <!-- Date range parameters for NewsAPI -->
-                        <div class="search-range-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 0.2rem;">
-                            <div style="display: flex; flex-direction: column; gap: 0.3rem;">
-                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">From Date (NewsAPI)</label>
-                                <input type="date" class="search-input" id="search-date-from" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" value="2026-05-01">
+                        <div class="control-row">
+                            <div>
+                                <label class="control-label" for="search-date-from">From Date</label>
+                                <input type="date" class="search-input" id="search-date-from" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;">
                             </div>
-                            <div style="display: flex; flex-direction: column; gap: 0.3rem;">
-                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">To Date (NewsAPI)</label>
-                                <input type="date" class="search-input" id="search-date-to" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" value="2026-05-18">
+                            <div>
+                                <label class="control-label" for="search-date-to">To Date</label>
+                                <input type="date" class="search-input" id="search-date-to" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;">
                             </div>
                         </div>
-
-                        <!-- Top 10 correlated news result list -->
-                        <div class="list-container" id="news-results-list">
-                            <!-- Items will be dynamically populated by Javascript -->
+                        <div class="control-row three">
+                            <div>
+                                <label class="control-label" for="news-language">Language</label>
+                                <select class="select-input" id="news-language">
+                                    <option value="en">English</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="fr">French</option>
+                                    <option value="de">German</option>
+                                    <option value="it">Italian</option>
+                                    <option value="ro">Romanian</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="control-label" for="news-sort">Sort</label>
+                                <select class="select-input" id="news-sort">
+                                    <option value="publishedAt">Newest</option>
+                                    <option value="relevancy">Relevance</option>
+                                    <option value="popularity">Popularity</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="control-label" for="news-page">Page</label>
+                                <input type="number" class="number-input" id="news-page" min="1" value="1">
+                            </div>
+                        </div>
+                        <div class="control-row">
+                            <label class="checkbox-row">
+                                <input type="checkbox" id="news-include-spans" checked>
+                                <span>Highlight biased spans</span>
+                            </label>
+                            <div>
+                                <label class="control-label" for="news-max-spans">Max Spans</label>
+                                <input type="number" class="number-input" id="news-max-spans" min="0" max="20" value="5">
+                            </div>
                         </div>
                     </div>
                 </div>
+
+                <div>
+                    <h3 class="section-title">Results</h3>
+                    <div class="list-container" id="news-results-list"></div>
+                </div>
             </div>
 
-            <!-- Right Side: The Single, Unified Statistics Panel -->
             <div class="workspace-panel" style="position: relative;">
-
-                <!-- Loading overlay -->
                 <div class="loader-overlay hidden" id="panel-loader">
                     <div class="spinner"></div>
                     <div style="font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem; font-weight: 500;"
                         id="loader-message">Processing Embeddings...</div>
                 </div>
 
-                <!-- Empty Initial State -->
                 <div id="panel-empty-state"
                     style="margin: auto; text-align: center; max-width: 420px; display: flex; flex-direction: column; align-items: center; gap: 1.2rem;">
                     <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
@@ -712,46 +955,47 @@
                         <line x1="9" y1="3" x2="9" y2="21"></line>
                     </svg>
                     <h3 style="font-family: 'Space Grotesk', sans-serif;">Workspace Idle</h3>
-                    <p style="color: var(--text-muted); font-size: 0.95rem; font-weight: 300; line-height: 1.5;">Select
-                        an article from the left list, or click "Analyze Sandbox Text" to populate this unified
-                        workspace with complete pipeline predictions.</p>
+                    <p style="color: var(--text-muted); font-size: 0.95rem; font-weight: 300; line-height: 1.5;">
+                        Run a text or news analysis to populate this workspace with live backend
+                        predictions.</p>
                 </div>
 
-                <!-- Main Analysis Workspace (hidden until loaded) -->
                 <div id="panel-main-content" class="hidden"
                     style="display: flex; flex-direction: column; gap: 2.2rem; animation: fadeIn 0.4s ease;">
-
-                    <!-- Workspace Header (Metadata) -->
                     <div class="workspace-header">
-                        <div class="workspace-title-lbl" id="ws-meta-outlet">Breitbart News Network • topic: election
-                        </div>
-                        <h2 class="workspace-active-title" id="ws-active-title">Citizens protest against corrupt and
-                            manipulated electoral regulations.</h2>
+                        <div class="workspace-title-lbl" id="ws-meta-outlet">Live analysis</div>
+                        <h2 class="workspace-active-title" id="ws-active-title">Analysis result</h2>
+                        <a class="article-link hidden" id="ws-article-link" href="#" target="_blank" rel="noopener noreferrer">Open source article</a>
                     </div>
 
-
-
-                    <!-- Metrics Layer -->
                     <div class="metrics-row">
-                        <!-- Bias Model Card -->
                         <div class="metric-card bias">
                             <div class="metric-lbl">Bias Model</div>
-                            <div class="metric-val" id="metric-bias-score">91.6%</div>
-                            <div class="metric-badge badge-biased" id="metric-bias-label">BIASED</div>
-                        </div>
-
-                        <!-- GNN Consensus Prediction Card -->
-                        <div class="metric-card gnn">
-                            <div class="metric-lbl">GNN Graph Consensus</div>
-                            <div class="metric-val" id="metric-gnn-score">94.8%</div>
-                            <div class="metric-badge badge-biased" id="metric-gnn-label">BIASED</div>
+                            <div class="metric-val" id="metric-bias-score">0%</div>
+                            <div class="metric-badge badge-unbiased" id="metric-bias-label">NON-BIASED</div>
                         </div>
                     </div>
 
-                    <!-- Layout: Radar Chart & Token Ablation -->
-                    <div class="workspace-body-grid">
+                    <div class="details-grid">
+                        <div class="detail-pill">
+                            <span class="detail-label">Biased Probability</span>
+                            <span class="detail-value" id="detail-prob-biased">0%</span>
+                        </div>
+                        <div class="detail-pill">
+                            <span class="detail-label">Unbiased Probability</span>
+                            <span class="detail-value" id="detail-prob-unbiased">0%</span>
+                        </div>
+                        <div class="detail-pill">
+                            <span class="detail-label">Confidence</span>
+                            <span class="detail-value" id="detail-confidence">0%</span>
+                        </div>
+                        <div class="detail-pill">
+                            <span class="detail-label">Sentiment</span>
+                            <span class="detail-value" id="detail-sentiment">neutral</span>
+                        </div>
+                    </div>
 
-                        <!-- Col 1: 7-Class Emotion Radar Chart -->
+                    <div class="workspace-body-grid">
                         <div>
                             <h3
                                 style="font-family: 'Space Grotesk', sans-serif; margin-bottom: 1rem; font-size: 1.1rem; color: #fff;">
@@ -761,44 +1005,39 @@
                             </div>
                         </div>
 
-                        <!-- Col 2: Ablation Interpretability Sandbox -->
                         <div style="display: flex; flex-direction: column; gap: 1rem;">
-                            <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; color: #fff;">Token
-                                Ablation (Aesthetics & Influence)</h3>
+                            <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; color: #fff;">
+                                Biased Span Evidence</h3>
 
-                            <!-- Interactive highlighted text field -->
-                            <div class="ablation-field" id="ws-ablation-text">
-                                <!-- Populated dynamically by tokens -->
-                            </div>
-
-                            <!-- Ablated details card -->
-                            <div class="ablation-details" id="ws-ablation-details">
-                                <div class="ablation-header">
-                                    <div class="ablation-word" id="ws-ablation-word">protest</div>
-                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Ablation Influence Card
+                            <div class="evidence-layout">
+                                <div class="ablation-details" id="ws-ablation-details">
+                                    <div class="ablation-header">
+                                        <div class="ablation-word" id="ws-ablation-word">none</div>
+                                        <div style="font-size: 0.75rem; color: var(--text-muted);">Sentence Influence</div>
+                                    </div>
+                                    <p class="ablation-desc" id="ws-ablation-desc">Select a highlighted span to see details.</p>
+                                    <div class="ablation-stats">
+                                        <div class="ablation-stat-item">
+                                            <div class="stat-val neg" id="ws-stat-anger">N/A</div>
+                                            <div class="stat-lbl">Sentiment</div>
+                                        </div>
+                                        <div class="ablation-stat-item">
+                                            <div class="stat-val neg" id="ws-stat-disgust">N/A</div>
+                                            <div class="stat-lbl">Confidence</div>
+                                        </div>
+                                        <div class="ablation-stat-item">
+                                            <div class="stat-val neg" id="ws-stat-bias">0.00</div>
+                                            <div class="stat-lbl">Bias Delta</div>
+                                        </div>
                                     </div>
                                 </div>
-                                <p class="ablation-desc" id="ws-ablation-desc">Select an ablatable token to see details.
-                                </p>
-                                <div class="ablation-stats">
-                                    <div class="ablation-stat-item">
-                                        <div class="stat-val neg" id="ws-stat-anger">-0.45</div>
-                                        <div class="stat-lbl">Anger Drop</div>
-                                    </div>
-                                    <div class="ablation-stat-item">
-                                        <div class="stat-val neg" id="ws-stat-disgust">-0.32</div>
-                                        <div class="stat-lbl">Disgust Drop</div>
-                                    </div>
-                                    <div class="ablation-stat-item">
-                                        <div class="stat-val neg" id="ws-stat-bias">-0.68</div>
-                                        <div class="stat-lbl">Bias Drop</div>
-                                    </div>
+
+                                <div class="ablation-field" id="ws-ablation-text">
                                 </div>
                             </div>
                         </div>
                     </div>
 
-                    <!-- Collapsible Full Text Card -->
                     <div class="article-expansion" id="ws-article-expansion" style="margin-top: 1.5rem;">
                         <div class="expansion-header" id="ws-expansion-header">
                             <div class="expansion-title">
@@ -823,580 +1062,344 @@
         </div>
     </div>
 
-    <!-- Data & Interactive Logic Script -->
     <script>
-        // DOM Elements
+        const API_BASE = window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:8000';
+        const EMOTION_ORDER = ['anger', 'disgust', 'fear', 'joy', 'optimism', 'sadness', 'neutral'];
+
         const btnAnalyzeSandbox = document.getElementById('btn-analyze-sandbox');
         const btnSearch = document.getElementById('btn-search');
         const searchQuery = document.getElementById('search-query');
         const newsResultsList = document.getElementById('news-results-list');
-
         const panelEmptyState = document.getElementById('panel-empty-state');
         const panelMainContent = document.getElementById('panel-main-content');
         const panelLoader = document.getElementById('panel-loader');
         const loaderMessage = document.getElementById('loader-message');
-
         const sandboxTextarea = document.getElementById('sandbox-textarea');
-
-        // Dynamic chart reference
-        let radarChartInstance = null;
-
-        // Unified Workspace update variables
         const wsMetaOutlet = document.getElementById('ws-meta-outlet');
         const wsActiveTitle = document.getElementById('ws-active-title');
+        const wsArticleLink = document.getElementById('ws-article-link');
         const metricBiasScore = document.getElementById('metric-bias-score');
         const metricBiasLabel = document.getElementById('metric-bias-label');
-        const metricGnnScore = document.getElementById('metric-gnn-score');
-        const metricGnnLabel = document.getElementById('metric-gnn-label');
         const wsAblationText = document.getElementById('ws-ablation-text');
-
         const wsAblationWord = document.getElementById('ws-ablation-word');
         const wsAblationDesc = document.getElementById('ws-ablation-desc');
         const wsStatAnger = document.getElementById('ws-stat-anger');
         const wsStatDisgust = document.getElementById('ws-stat-disgust');
         const wsStatBias = document.getElementById('ws-stat-bias');
-
-        // Collapsible variables
         const wsArticleExpansion = document.getElementById('ws-article-expansion');
         const wsExpansionHeader = document.getElementById('ws-expansion-header');
         const wsFullText = document.getElementById('ws-full-text');
+        const detailProbBiased = document.getElementById('detail-prob-biased');
+        const detailProbUnbiased = document.getElementById('detail-prob-unbiased');
+        const detailConfidence = document.getElementById('detail-confidence');
+        const detailSentiment = document.getElementById('detail-sentiment');
+        let radarChartInstance = null;
 
-        // COMPLETE MOCK DATA FOR ARTICLES (Fully representative of the search queries)
-        const mockArticles = [
-            {
-                id: 1,
-                title: "Citizens protest against corrupt and manipulated electoral regulations.",
-                body: "Massive public protests condemn corporate media propaganda and bias.",
-                outlet: "Breitbart News Network",
-                topic: "election",
-                correlation: 98.4,
-                biasScore: 94.8,
-                biasLabel: "BIASED",
-                gnnScore: 96.2,
-                gnnLabel: "BIASED",
-                date: "2026-05-18",
-                emotions: [0.88, 0.74, 0.35, 0.05, 0.12, 0.32, 0.08], // anger, disgust, fear, joy, optimism, sadness, neutral
-                keywords: ["protest", "election", "regulations"],
-                ablation: {
-                    "protests": { desc: "Core activist action token. Masking this word significantly drops the anger signature and neutralizes the GNN structural bias prediction.", stats: { anger: "-0.54", disgust: "-0.22", bias: "-0.65" } },
-                    "propaganda": { desc: "High-value political trigger token. Masking it reduces the calculated bias probability metrics on the GNN attention model.", stats: { anger: "-0.38", disgust: "-0.45", bias: "-0.78" } },
-                    "bias": { desc: "Explicit meta-attribution word. Directly impacts target ideological polarity regression nodes.", stats: { anger: "-0.12", disgust: "-0.20", bias: "-0.48" } }
-                }
-            },
-            {
-                id: 2,
-                title: "Massive public protests erupt outside parliament following economic collapse.",
-                body: "Outraged workers protest severe layoffs and government hostility today.",
-                outlet: "The Guardian",
-                topic: "economy",
-                correlation: 92.1,
-                biasScore: 48.2,
-                biasLabel: "UNBIASED",
-                gnnScore: 52.4,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-15",
-                emotions: [0.72, 0.45, 0.62, 0.02, 0.05, 0.78, 0.10],
-                keywords: ["protest", "hostility", "layoffs"],
-                ablation: {
-                    "protest": { desc: "Action keyword indicating dissent. Drops anger levels.", stats: { anger: "-0.35", disgust: "-0.15", bias: "-0.12" } },
-                    "hostility": { desc: "Aggressive emotional indicator. Directly drives sadness and disgust output scores.", stats: { anger: "-0.52", disgust: "-0.38", bias: "-0.28" } }
-                }
-            },
-            {
-                id: 3,
-                title: "Local authorities enforce mandatory health restrictions and lockdowns.",
-                body: "Citizens express intense fear and disgust over ongoing quarantine restrictions.",
-                outlet: "FoxNews Network",
-                topic: "public_health",
-                correlation: 89.6,
-                biasScore: 82.4,
-                biasLabel: "BIASED",
-                gnnScore: 85.1,
-                gnnLabel: "BIASED",
-                date: "2026-05-14",
-                emotions: [0.65, 0.82, 0.88, 0.01, 0.02, 0.45, 0.08],
-                keywords: ["restrictions", "fear", "quarantine"],
-                ablation: {
-                    "restrictions": { desc: "Key trigger representing civil regulation. Masking drops bias score and fear levels.", stats: { anger: "-0.25", disgust: "-0.32", bias: "-0.58" } },
-                    "fear": { desc: "Direct emotional text attribute. Eliminating it instantly drops the fear classification output.", stats: { anger: "-0.10", disgust: "-0.05", bias: "-0.20" } },
-                    "disgust": { desc: "Explicit emotional reaction. Strongly correlates with Disgust and Sadness classes.", stats: { anger: "-0.20", disgust: "-0.78", bias: "-0.15" } }
-                }
-            },
-            {
-                id: 4,
-                title: "Congress passes border security bill amidst hostile and bitter debates.",
-                body: "Opposing parties trade insults, creating public anger and deep division.",
-                outlet: "MSNBC News",
-                topic: "border_security",
-                correlation: 86.5,
-                biasScore: 78.5,
-                biasLabel: "BIASED",
-                gnnScore: 81.2,
-                gnnLabel: "BIASED",
-                date: "2026-05-10",
-                emotions: [0.92, 0.68, 0.25, 0.01, 0.05, 0.50, 0.05],
-                keywords: ["border", "hostile", "insults"],
-                ablation: {
-                    "hostile": { desc: "Explicitly hostile terminology. Removal heavily impacts Anger and Disgust scores.", stats: { anger: "-0.62", disgust: "-0.40", bias: "-0.38" } },
-                    "insults": { desc: "Dissonance token. Masking reduces calculated bias from congressional reporting.", stats: { anger: "-0.41", disgust: "-0.45", bias: "-0.50" } }
-                }
-            },
-            {
-                id: 5,
-                title: "Local authority enforces mandatory restrictions and absolute tyranny.",
-                body: "Local residents claim these health measures are a form of political tyranny.",
-                outlet: "Breitbart News Network",
-                topic: "civil_liberties",
-                correlation: 84.1,
-                biasScore: 96.5,
-                biasLabel: "BIASED",
-                gnnScore: 98.1,
-                gnnLabel: "BIASED",
-                date: "2026-05-17",
-                emotions: [0.95, 0.78, 0.70, 0.01, 0.01, 0.35, 0.03],
-                keywords: ["tyranny", "restrictions", "political"],
-                ablation: {
-                    "tyranny": { desc: "Extremely polar, inflammatory word. Masking this word completely collapses the GNN and local Bias classifier outputs.", stats: { anger: "-0.78", disgust: "-0.42", bias: "-0.88" } },
-                    "restrictions": { desc: "Administrative trigger term. Has moderate influence on overall structural node clustering.", stats: { anger: "-0.32", disgust: "-0.28", bias: "-0.45" } }
-                }
-            },
-            {
-                id: 6,
-                title: "Voters express immense joy and optimism after official election results.",
-                body: "A wave of collective joy and optimism sweeps the community post election.",
-                outlet: "CNN International",
-                topic: "election",
-                correlation: 78.9,
-                biasScore: 32.4,
-                biasLabel: "UNBIASED",
-                gnnScore: 38.6,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-18",
-                emotions: [0.02, 0.01, 0.01, 0.94, 0.88, 0.05, 0.15],
-                keywords: ["joy", "optimism", "election"],
-                ablation: {
-                    "joy": { desc: "Strong positive semantic token. Primary driver for the Joy classifier output.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.05" } },
-                    "optimism": { desc: "Future-positive anchor. Removal drops optimism metrics significantly.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.02" } }
-                }
-            },
-            {
-                id: 7,
-                title: "Government releases neutral statement regarding regulatory changes.",
-                body: "Independent experts provide a neutral and objective analysis of the new policy.",
-                outlet: "Reuters",
-                topic: "policy",
-                correlation: 72.1,
-                biasScore: 12.5,
-                biasLabel: "UNBIASED",
-                gnnScore: 15.3,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-12",
-                emotions: [0.05, 0.04, 0.08, 0.10, 0.15, 0.08, 0.92],
-                keywords: ["neutral", "objective", "policy"],
-                ablation: {
-                    "neutral": { desc: "Objective modifier. Masking increases ambiguity but retains unbiased labels.", stats: { anger: "+0.02", disgust: "+0.02", bias: "+0.05" } },
-                    "objective": { desc: "Positive verification parameter. Directly drives the baseline Neutral confidence score.", stats: { anger: "+0.01", disgust: "+0.01", bias: "+0.02" } }
-                }
-            },
-            {
-                id: 8,
-                title: "Economic inflation surge creates deep sadness and public anxiety.",
-                body: "Anxiety and severe sadness spread as families struggle to afford basic goods.",
-                outlet: "MSNBC News",
-                topic: "economy",
-                correlation: 68.4,
-                biasScore: 45.1,
-                biasLabel: "UNBIASED",
-                gnnScore: 48.9,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-08",
-                emotions: [0.35, 0.28, 0.72, 0.01, 0.02, 0.91, 0.12],
-                keywords: ["sadness", "anxiety", "inflation"],
-                ablation: {
-                    "sadness": { desc: "Primary depressive descriptor. Masking this drops overall Sadness metrics significantly.", stats: { anger: "-0.15", disgust: "-0.08", bias: "-0.05" } },
-                    "anxiety": { desc: "Fear-equivalent stress token. Masking it drops the fear and sadness predictions.", stats: { anger: "-0.10", disgust: "-0.05", bias: "-0.08" } }
-                }
-            },
-            {
-                id: 9,
-                title: "Tech enterprise explains their neutral search algorithm updates.",
-                body: "The search system updates focus strictly on providing neutral and direct relevance.",
-                outlet: "BBC World",
-                topic: "technology",
-                correlation: 62.3,
-                biasScore: 15.8,
-                biasLabel: "UNBIASED",
-                gnnScore: 18.2,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-05",
-                emotions: [0.03, 0.02, 0.05, 0.12, 0.18, 0.05, 0.94],
-                keywords: ["neutral", "updates", "technology"],
-                ablation: {
-                    "neutral": { desc: "Semantic baseline token. Validates high neutral confidence metric.", stats: { anger: "+0.01", disgust: "+0.01", bias: "+0.03" } }
-                }
-            },
-            {
-                id: 10,
-                title: "Social welfare benefits expansion triggers massive joy and community hope.",
-                body: "Families express profound optimism and hope for the coming economic quarters.",
-                outlet: "The Guardian",
-                topic: "social_policy",
-                correlation: 59.8,
-                biasScore: 35.6,
-                biasLabel: "UNBIASED",
-                gnnScore: 41.2,
-                gnnLabel: "UNBIASED",
-                date: "2026-05-02",
-                emotions: [0.01, 0.01, 0.02, 0.88, 0.92, 0.04, 0.18],
-                keywords: ["hope", "optimism", "welfare"],
-                ablation: {
-                    "hope": { desc: "Semantic hope descriptor. Drives joy and optimism categories in the 7-class head.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.02" } },
-                    "optimism": { desc: "Direct future-positive cue. Removal drops community optimism outputs.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.03" } }
-                }
-            }
-        ];
+        function todayIso() {
+            return new Date().toISOString().slice(0, 10);
+        }
 
-        // Search trigger
-        btnSearch.addEventListener('click', runSearch);
-        searchQuery.addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') runSearch();
+        function priorIso(days) {
+            const date = new Date();
+            date.setDate(date.getDate() - days);
+            return date.toISOString().slice(0, 10);
+        }
+
+        document.getElementById('search-date-to').value = todayIso();
+        document.getElementById('search-date-from').value = priorIso(14);
+
+        document.querySelectorAll('.tab-btn').forEach(button => {
+            button.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(item => item.classList.remove('active'));
+                document.querySelectorAll('.tab-panel').forEach(item => item.classList.add('hidden'));
+                button.classList.add('active');
+                document.getElementById(`tab-${button.dataset.tab}`).classList.remove('hidden');
+                newsResultsList.innerHTML = '';
+            });
         });
 
-        /*
-          ======================================================================
-          DEVELOPER NOTE (LIVE API INTEGRATION BY DACIAN / SIBLING DEVELOPER):
-          To replace this local mock list generator with the real live API search
-          using your FastAPI backend, copy the following boilerplate:
+        btnAnalyzeSandbox.addEventListener('click', analyzeSingle);
+        btnSearch.addEventListener('click', analyzeNews);
+        searchQuery.addEventListener('keydown', event => {
+            if (event.key === 'Enter') analyzeNews();
+        });
+        wsExpansionHeader.addEventListener('click', () => {
+            wsArticleExpansion.classList.toggle('expanded');
+        });
 
-          async function runLiveSearch() {
-              const query = searchQuery.value.trim();
-              const dateFrom = document.getElementById('search-date-from').value;
-              const dateTo = document.getElementById('search-date-to').value;
-              if (!query) return;
-
-              newsResultsList.innerHTML = '';
-              panelEmptyState.classList.add('hidden');
-              panelMainContent.classList.add('hidden');
-              panelLoader.classList.remove('hidden');
-              loaderMessage.textContent = "Querying Live NewsAPI & Neural Models...";
-
-              try {
-                  const response = await fetch("http://localhost:8000/api/v1/news/analyze", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                          keywords: query,
-                          from_date: dateFrom || null,
-                          to_date: dateTo || null,
-                          include_biased_spans: true,
-                          max_spans: 5
-                      })
-                  });
-                  if (!response.ok) throw new Error("Backend server returned HTTP error");
-                  const data = await response.json();
-                  
-                  panelLoader.classList.add('hidden');
-                  if (data.articles.length === 0) {
-                      newsResultsList.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:1rem;">No live news found.</div>';
-                      return;
-                  }
-
-                  // Render live articles
-                  data.articles.forEach((item, index) => {
-                      const el = document.createElement('div');
-                      el.className = 'news-list-item';
-                      if (index === 0) {
-                          el.className += ' selected';
-                          loadLiveArticle(item);
-                      }
-                      el.innerHTML = `
-                          <div class="item-meta">
-                              <span>${item.article.source_name || "News Outlet"}</span>
-                              <span class="item-correlation" style="color: var(--accent-primary); font-weight:600;">
-                                  ${Math.round(item.analysis.bias.prob_biased * 100)}% Bias
-                              </span>
-                          </div>
-                          <div class="item-title">${item.article.title}</div>
-                      `;
-                      el.addEventListener('click', () => {
-                          document.querySelectorAll('.news-list-item').forEach(x => x.classList.remove('selected'));
-                          el.classList.add('selected');
-                          loadLiveArticle(item);
-                      });
-                      newsResultsList.appendChild(el);
-                  });
-              } catch (err) {
-                  console.error("Live integration error:", err);
-                  panelLoader.classList.add('hidden');
-                  newsResultsList.innerHTML = '<div style="text-align:center; color:var(--accent-tertiary); padding:1rem; font-size:0.85rem;">API Connection Failed. Please boot uvicorn.</div>';
-              }
-          }
-
-          function loadLiveArticle(item) {
-              panelMainContent.classList.remove('hidden');
-              
-              // 1. Title & Outlet
-              wsMetaOutlet.textContent = `${item.article.source_name || "News Outlet"} • Published: ${new Date(item.article.published_at).toLocaleDateString()}`;
-              wsActiveTitle.textContent = item.article.title;
-
-              // 2. Metrics Cards (Live Models)
-              metricBiasScore.textContent = `${Math.round(item.analysis.bias.prob_biased * 100)}%`;
-              metricBiasLabel.textContent = item.analysis.bias.label.toUpperCase();
-              metricBiasLabel.className = item.analysis.bias.label === "Biased" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
-
-              metricGnnScore.textContent = "N/A";
-              metricGnnLabel.textContent = "DYNAMIC NEWS";
-              metricGnnLabel.className = "metric-badge badge-unbiased";
-
-              // 3. Radar Chart (Map dict keys in dataloader order)
-              const order = ['anger', 'disgust', 'fear', 'joy', 'optimism', 'sadness', 'neutral'];
-              const emotionsArray = order.map(k => item.analysis.emotions[k] || 0.0);
-              renderRadarChart(emotionsArray);
-
-              // 4. Render interactive ablatable sentences (using real biased_spans)
-              renderLiveAblationText(item.article.content || item.article.description || "", item.analysis.biased_spans);
-
-              // 5. Expandable full text accordion
-              wsArticleExpansion.classList.remove('expanded');
-              wsFullText.textContent = item.article.content || item.article.description || "No article content body available.";
-          }
-
-          function renderLiveAblationText(text, spans) {
-              wsAblationText.innerHTML = '';
-              
-              // If no spans, just render normal text
-              if (!spans || spans.length === 0) {
-                  wsAblationText.textContent = text;
-                  wsAblationWord.textContent = "none";
-                  wsAblationDesc.textContent = "No highly biased sentence patterns detected in this news article.";
-                  return;
-              }
-
-              // Highlight matching sentence spans
-              let lastIdx = 0;
-              spans.forEach((span, i) => {
-                  if (span.start > lastIdx) {
-                      const normalSpan = document.createElement('span');
-                      normalSpan.textContent = text.slice(lastIdx, span.start);
-                      wsAblationText.appendChild(normalSpan);
-                  }
-
-                  const highlightedSpan = document.createElement('span');
-                  highlightedSpan.textContent = text.slice(span.start, span.end);
-                  highlightedSpan.className = 'token-badge ablatable influence-high';
-                  highlightedSpan.style.cursor = 'pointer';
-                  highlightedSpan.style.borderBottom = '2px solid var(--accent-tertiary)';
-                  highlightedSpan.addEventListener('click', () => {
-                      wsAblationWord.textContent = `Sentence #${i + 1}`;
-                      wsAblationDesc.textContent = `"${span.text}"`;
-                      wsStatAnger.textContent = "N/A";
-                      wsStatDisgust.textContent = "N/A";
-                      wsStatBias.textContent = `-${span.bias_delta.toFixed(2)}`;
-                  });
-                  wsAblationText.appendChild(highlightedSpan);
-                  lastIdx = span.end;
-              });
-
-              if (lastIdx < text.length) {
-                  const normalSpan = document.createElement('span');
-                  normalSpan.textContent = text.slice(lastIdx);
-                  wsAblationText.appendChild(normalSpan);
-              }
-              
-              // Trigger first highlight as active card
-              wsAblationWord.textContent = `Sentence #1`;
-              wsAblationDesc.textContent = `"${spans[0].text}"`;
-              wsStatAnger.textContent = "N/A";
-              wsStatDisgust.textContent = "N/A";
-              wsStatBias.textContent = `-${spans[0].bias_delta.toFixed(2)}`;
-          }
-          ======================================================================
-        */
-
-        // Add auto-triggers to range dates
-        document.getElementById('search-date-from').addEventListener('change', runSearch);
-        document.getElementById('search-date-to').addEventListener('change', runSearch);
-
-        function runSearch() {
-            const query = searchQuery.value.toLowerCase().trim();
-            const dateFrom = document.getElementById('search-date-from').value;
-            const dateTo = document.getElementById('search-date-to').value;
-            newsResultsList.innerHTML = '';
-
-            // Filter articles by checking matches AND date range limits!
-            const filtered = mockArticles.filter(art => {
-                // Range validity checks
-                if (dateFrom && art.date < dateFrom) return false;
-                if (dateTo && art.date > dateTo) return false;
-
-                if (!query) return true;
-                return art.keywords.some(k => k.includes(query)) ||
-                    art.title.toLowerCase().includes(query) ||
-                    art.body.toLowerCase().includes(query);
+        async function apiJson(path, options = {}) {
+            const response = await fetch(`${API_BASE}${path}`, {
+                ...options,
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {})
+                }
             });
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : null;
+            if (!response.ok) {
+                const detail = data && data.detail ? data.detail : `HTTP ${response.status}`;
+                throw new Error(Array.isArray(detail) ? detail.map(item => item.msg).join('; ') : detail);
+            }
+            return data;
+        }
 
-            if (filtered.length === 0) {
-                newsResultsList.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:1rem; font-size:0.9rem;">No correlated news found.</div>';
+        async function refreshStatus() {
+            try {
+                const [health, models] = await Promise.all([
+                    apiJson('/health'),
+                    apiJson('/api/v1/models/status')
+                ]);
+                setStatus('status-api', 'Online', true);
+                setStatus('status-bias', health.bias_model_loaded ? 'Loaded' : 'Missing', health.bias_model_loaded);
+                setStatus('status-emotion', health.emotion_model_loaded ? 'Loaded' : 'Missing', health.emotion_model_loaded);
+                setStatus('status-news', health.news_api_configured ? 'Configured' : 'Missing key', health.news_api_configured);
+                document.getElementById('status-device').textContent = models.device || health.device || 'Unknown';
+            } catch (error) {
+                setStatus('status-api', 'Offline', false);
+                setStatus('status-bias', 'Unknown', false);
+                setStatus('status-emotion', 'Unknown', false);
+                setStatus('status-news', 'Unknown', false);
+                document.getElementById('status-device').textContent = 'Unknown';
+                showListMessage(`Backend status failed: ${error.message}`, true);
+            }
+        }
+
+        function setStatus(id, text, ok) {
+            const el = document.getElementById(id);
+            el.textContent = text;
+            el.className = `status-value ${ok ? 'status-ok' : 'status-bad'}`;
+        }
+
+        async function analyzeSingle() {
+            const text = sandboxTextarea.value.trim();
+            if (!text) {
+                showListMessage('Enter text before running analysis.', true);
                 return;
             }
-
-            filtered.forEach((art, index) => {
-                const item = document.createElement('div');
-                item.className = 'news-list-item';
-                if (index === 0) {
-                    item.className += ' selected';
-                    loadArticleIntoWorkspace(art);
-                }
-
-                item.innerHTML = `
-                    <div class="item-meta">
-                        <span>${art.outlet}</span>
-                        <span class="item-correlation">${art.correlation}% Correlation</span>
-                    </div>
-                    <div class="item-title">${art.title}</div>
-                `;
-
-                item.addEventListener('click', () => {
-                    // Update selection
-                    document.querySelectorAll('.news-list-item').forEach(el => el.classList.remove('selected'));
-                    item.classList.add('selected');
-                    loadArticleIntoWorkspace(art);
+            setLoading('Running live models on custom input...');
+            try {
+                const analysis = await apiJson('/api/v1/analyze', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        text,
+                        include_biased_spans: document.getElementById('single-include-spans').checked,
+                        max_spans: numberValue('single-max-spans', 5)
+                    })
                 });
+                const item = {
+                    title: 'Custom Sandbox Input',
+                    meta: 'Sandbox Analysis',
+                    text,
+                    url: null,
+                    analysis
+                };
+                renderSelectableResults([item], 'single');
+                loadResult(item);
+            } catch (error) {
+                showError(error);
+            } finally {
+                clearLoading();
+            }
+        }
 
-                newsResultsList.appendChild(item);
+        async function analyzeNews() {
+            const keywords = searchQuery.value.trim();
+            if (!keywords) {
+                showListMessage('Enter keywords before running news analysis.', true);
+                return;
+            }
+            setLoading('Searching NewsAPI and analyzing articles...');
+            try {
+                const data = await apiJson('/api/v1/news/analyze', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        keywords,
+                        language: document.getElementById('news-language').value,
+                        sort_by: document.getElementById('news-sort').value,
+                        from_date: document.getElementById('search-date-from').value || null,
+                        to_date: document.getElementById('search-date-to').value || null,
+                        page: numberValue('news-page', 1),
+                        include_biased_spans: document.getElementById('news-include-spans').checked,
+                        max_spans: numberValue('news-max-spans', 5)
+                    })
+                });
+                const items = data.articles.map(({ article, analysis }, index) => ({
+                    title: article.title || `News Article ${index + 1}`,
+                    meta: [
+                        article.source_name || 'News Outlet',
+                        article.author,
+                        article.published_at ? formatDate(article.published_at) : null,
+                        `Total: ${data.total_results}`
+                    ].filter(Boolean).join(' • '),
+                    text: [article.title, article.description, article.content].filter(Boolean).join('\n\n'),
+                    url: article.url,
+                    analysis
+                }));
+                if (!items.length) {
+                    showListMessage('No analyzable articles returned for this query.');
+                    return;
+                }
+                renderSelectableResults(items, 'news');
+                loadResult(items[0]);
+            } catch (error) {
+                showError(error);
+            } finally {
+                clearLoading();
+            }
+        }
+
+        function renderSelectableResults(items, type) {
+            newsResultsList.innerHTML = '';
+            items.forEach((item, index) => {
+                const row = document.createElement('div');
+                row.className = `news-list-item${index === 0 ? ' selected' : ''}`;
+                const bias = item.analysis.bias;
+                const biasState = getBiasState(bias);
+                row.innerHTML = `
+                    <div class="item-meta">
+                        <span>${escapeHtml(item.meta || type)}</span>
+                        <span class="item-correlation">${percent(Math.max(bias.prob_biased, bias.prob_unbiased))} ${biasState.label}</span>
+                    </div>
+                    <div class="item-title">${escapeHtml(item.title)}</div>
+                `;
+                row.addEventListener('click', () => {
+                    document.querySelectorAll('.news-list-item').forEach(el => el.classList.remove('selected'));
+                    row.classList.add('selected');
+                    loadResult(item);
+                });
+                newsResultsList.appendChild(row);
             });
         }
 
-        // Custom Sandbox analyzer
-        btnAnalyzeSandbox.addEventListener('click', async () => {
-            const text = sandboxTextarea.value.trim();
-            if (!text) return;
-
-            /*
-              ======================================================================
-              DEVELOPER NOTE (LIVE API INTEGRATION BY DACIAN / SIBLING DEVELOPER):
-              To replace this mock sandbox with the live analyze API request,
-              you can drop in this fetch boilerplate:
-
-              panelEmptyState.classList.add('hidden');
-              panelMainContent.classList.add('hidden');
-              panelLoader.classList.remove('hidden');
-              loaderMessage.textContent = "Running live models on custom input...";
-
-              try {
-                  const response = await fetch("http://localhost:8000/api/v1/analyze", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                          text: text,
-                          include_biased_spans: true,
-                          max_spans: 5
-                      })
-                  });
-                  const data = await response.json();
-                  panelLoader.classList.add('hidden');
-                  
-                  // Construct a unified live object and pass it to loadLiveArticle()!
-                  const mockArticleFormat = {
-                      article: {
-                          title: "Custom Sandbox Input",
-                          source_name: "Sandbox Analysis",
-                          published_at: new Date().toISOString(),
-                          content: text,
-                          description: ""
-                      },
-                      analysis: data
-                  };
-                  loadLiveArticle(mockArticleFormat);
-              } catch (err) {
-                  console.error(err);
-                  panelLoader.classList.add('hidden');
-                  alert("Failed to connect to API on http://localhost:8000. Is uvicorn running?");
-              }
-              return;
-              ======================================================================
-            */
-
-            // Show loader overlay with pipeline simulations
+        function loadResult(item) {
             panelEmptyState.classList.add('hidden');
-            panelMainContent.classList.add('hidden');
-            panelLoader.classList.remove('hidden');
-
-            loaderMessage.textContent = "Processing Embeddings (768-dim)...";
-            await sleep(800);
-
-            loaderMessage.textContent = "Running 7-Class Emotion Classifier...";
-            await sleep(600);
-
-            loaderMessage.textContent = "Querying pgvector HNSW Index...";
-            await sleep(600);
-
-            loaderMessage.textContent = "Aggregating Graph Attention GNN...";
-            await sleep(600);
-
-            panelLoader.classList.add('hidden');
             panelMainContent.classList.remove('hidden');
+            wsMetaOutlet.textContent = item.meta || 'Live analysis';
+            wsActiveTitle.textContent = item.title || 'Analysis result';
+            if (item.url) {
+                wsArticleLink.href = item.url;
+                wsArticleLink.classList.remove('hidden');
+            } else {
+                wsArticleLink.classList.add('hidden');
+            }
 
-            // Generate custom results for sandbox text
-            // Determine custom values dynamically by scanning for key terms
-            let isBiased = text.toLowerCase().includes('tyranny') || text.toLowerCase().includes('propaganda') || text.toLowerCase().includes('corrupt');
+            const { analysis } = item;
+            const biasState = getBiasState(analysis.bias);
+            metricBiasScore.textContent = percent(Math.max(analysis.bias.prob_biased, analysis.bias.prob_unbiased));
+            metricBiasScore.className = `metric-val score-${biasState.state}`;
+            metricBiasLabel.textContent = biasState.label;
+            metricBiasLabel.className = `metric-badge ${biasState.badgeClass}`;
 
-            let customArticle = {
-                title: "Custom Sandbox Content",
-                body: text,
-                outlet: "Sandbox Text Area",
-                topic: "user_sandbox",
-                biasScore: isBiased ? 92.5 : 24.1,
-                biasLabel: isBiased ? "BIASED" : "UNBIASED",
-                gnnScore: isBiased ? 94.6 : 28.5,
-                gnnLabel: isBiased ? "BIASED" : "UNBIASED",
-                // anger, disgust, fear, joy, optimism, sadness, neutral
-                emotions: isBiased ? [0.90, 0.82, 0.40, 0.02, 0.05, 0.20, 0.10] : [0.05, 0.05, 0.10, 0.40, 0.35, 0.10, 0.85],
-                ablation: {
-                    "tyranny": { desc: "Core absolute bias trigger. Drops GNN correlation to baseline metrics.", stats: { anger: "-0.75", disgust: "-0.35", bias: "-0.82" } },
-                    "propaganda": { desc: "Direct manipulative intent badge. Masking it neutralizes target model thresholds.", stats: { anger: "-0.40", disgust: "-0.48", bias: "-0.75" } },
-                    "disgust": { desc: "Direct expressive modifier. Directly impacts multi-label disgust outputs.", stats: { anger: "-0.15", disgust: "-0.80", bias: "-0.22" } },
-                    "anger": { desc: "Anger-anchored modifier. Direct impact on primary anger output scores.", stats: { anger: "-0.85", disgust: "-0.05", bias: "-0.12" } }
-                }
-            };
-
-            loadArticleIntoWorkspace(customArticle);
-        });
-
-        // Load targeted data directly into the Single Unified Workspace Panel!
-        async function loadArticleIntoWorkspace(art) {
-            panelEmptyState.classList.add('hidden');
-            panelMainContent.classList.add('hidden');
-            panelLoader.classList.remove('hidden');
-
-            loaderMessage.textContent = "Updating Workspace Statistics...";
-            await sleep(400);
-
-            panelLoader.classList.add('hidden');
-            panelMainContent.classList.remove('hidden');
-
-            // 1. Text headers
-            wsMetaOutlet.textContent = `${art.outlet} • topic: ${art.topic}`;
-            wsActiveTitle.textContent = art.title;
-
-            // 2. Metrics cards
-            metricBiasScore.textContent = `${art.biasScore}%`;
-            metricBiasLabel.textContent = art.biasLabel;
-            metricBiasLabel.className = art.biasLabel === "BIASED" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
-
-            metricGnnScore.textContent = `${art.gnnScore}%`;
-            metricGnnLabel.textContent = art.gnnLabel;
-            metricGnnLabel.className = art.gnnLabel === "BIASED" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
-
-            // 3. Render 7-Class Emotion Radar Chart!
-            renderRadarChart(art.emotions);
-
-            // 4. Render interactive ablatable text
-            renderAblatableText(art);
-
-            // 5. Populate and Collapse the Full Text expansion container
+            detailProbBiased.textContent = percent(analysis.bias.prob_biased);
+            detailProbUnbiased.textContent = percent(analysis.bias.prob_unbiased);
+            detailConfidence.textContent = percent(analysis.bias.confidence);
+            detailSentiment.textContent = `${analysis.sentiment.label} (${analysis.sentiment.score.toFixed(2)})`;
+            renderRadarChart(EMOTION_ORDER.map(key => analysis.emotions[key] || 0));
+            renderBiasedSpans(item.text || '', analysis.biased_spans || [], analysis);
             wsArticleExpansion.classList.remove('expanded');
-            wsFullText.textContent = art.body;
+            wsFullText.textContent = item.text || 'No text body available.';
+        }
+
+        function renderBiasedSpans(text, spans, analysis) {
+            wsAblationText.innerHTML = '';
+            resetSpanCard(analysis);
+            if (!text) {
+                wsAblationText.textContent = 'No text available for span highlighting.';
+                return;
+            }
+            if (!spans.length) {
+                wsAblationText.textContent = compactExcerpt(text);
+                wsAblationDesc.textContent = 'No biased sentence spans were returned for this result.';
+                return;
+            }
+
+            spans
+                .slice()
+                .sort((a, b) => a.start - b.start)
+                .forEach((span, index) => {
+                    const snippet = sentenceContext(text, span);
+                    const row = document.createElement('div');
+                    row.className = 'evidence-snippet';
+
+                    if (snippet.before) {
+                        const before = document.createElement('span');
+                        before.className = 'evidence-context';
+                        before.textContent = `${snippet.before} `;
+                        row.appendChild(before);
+                    }
+
+                    const mark = document.createElement('span');
+                    mark.textContent = snippet.biased || span.text;
+                    mark.className = 'token-badge ablatable influence-high';
+                    mark.addEventListener('click', () => selectSpan(index, span, analysis));
+                    row.appendChild(mark);
+
+                    if (snippet.after) {
+                        const after = document.createElement('span');
+                        after.className = 'evidence-context';
+                        after.textContent = ` ${snippet.after}`;
+                        row.appendChild(after);
+                    }
+
+                    wsAblationText.appendChild(row);
+                });
+            selectSpan(0, spans[0], analysis);
+        }
+
+        function sentenceContext(text, span) {
+            const biased = (text.slice(span.start, span.end) || span.text || '').trim();
+            const beforeText = text.slice(0, span.start).trim();
+            const afterText = text.slice(span.end).trim();
+            const previous = lastSentence(beforeText);
+            const next = firstSentence(afterText);
+            return {
+                before: previous ? truncateText(previous, 180) : '',
+                biased: truncateText(biased, 320),
+                after: previous ? '' : truncateText(next, 180)
+            };
+        }
+
+        function compactExcerpt(text) {
+            return truncateText(text.split(/(?<=[.!?])\s+/).slice(0, 2).join(' '), 420);
+        }
+
+        function firstSentence(text) {
+            return (text.match(/^[\s\S]*?[.!?](?:\s|$)/) || [text])[0].trim();
+        }
+
+        function lastSentence(text) {
+            const sentences = text.split(/(?<=[.!?])\s+/).map(item => item.trim()).filter(Boolean);
+            return sentences[sentences.length - 1] || '';
+        }
+
+        function truncateText(text, maxLength) {
+            if (!text || text.length <= maxLength) return text || '';
+            return `${text.slice(0, maxLength).trim()}...`;
+        }
+
+        function selectSpan(index, span, analysis) {
+            wsAblationWord.textContent = `Sentence ${index + 1}`;
+            wsAblationDesc.textContent = span.text || 'Selected biased span.';
+            wsStatAnger.textContent = analysis.sentiment.label;
+            wsStatDisgust.textContent = percent(analysis.bias.confidence);
+            wsStatBias.textContent = span.bias_delta.toFixed(3);
+            const card = document.getElementById('ws-ablation-details');
+            card.style.background = 'rgba(230, 92, 92, 0.05)';
+            card.style.border = '1px dashed rgba(230, 92, 92, 0.3)';
+            wsAblationWord.style.color = 'var(--accent-tertiary)';
+        }
+
+        function resetSpanCard(analysis) {
+            wsAblationWord.textContent = 'none';
+            wsAblationDesc.textContent = 'Select a highlighted span to see details.';
+            wsStatAnger.textContent = analysis.sentiment.label;
+            wsStatDisgust.textContent = percent(analysis.bias.confidence);
+            wsStatBias.textContent = '0.000';
+            const card = document.getElementById('ws-ablation-details');
+            card.style.background = 'rgba(217, 167, 82, 0.05)';
+            card.style.border = '1px dashed rgba(217, 167, 82, 0.3)';
+            wsAblationWord.style.color = 'var(--accent-primary)';
         }
 
         function renderRadarChart(emotionsData) {
@@ -1408,10 +1411,9 @@
             radarChartInstance = new Chart(ctx, {
                 type: 'radar',
                 data: {
-                    // EXACTLY 7 EMOTION HEAD LABELS AS DEFINED IN dataloader.py
                     labels: ['Anger', 'Disgust', 'Fear', 'Joy', 'Optimism', 'Sadness', 'Neutral'],
                     datasets: [{
-                        label: 'Core Activation Probabilities',
+                        label: 'Emotion Probabilities',
                         data: emotionsData,
                         backgroundColor: 'rgba(217, 167, 82, 0.15)',
                         borderColor: '#d9a752',
@@ -1442,78 +1444,75 @@
             });
         }
 
-        function renderAblatableText(art) {
-            wsAblationText.innerHTML = '';
-            const words = art.body.split(/\s+/);
+        function numberValue(id, fallback) {
+            const value = Number(document.getElementById(id).value);
+            return Number.isFinite(value) ? value : fallback;
+        }
 
-            words.forEach(word => {
-                const cleanWord = word.toLowerCase().replace(/[^a-z]/g, '');
-                const span = document.createElement('span');
-                span.textContent = word + ' ';
-                span.className = 'token-badge';
+        function percent(value) {
+            return `${Math.round((value || 0) * 100)}%`;
+        }
 
-                if (art.ablation && art.ablation[cleanWord]) {
-                    const info = art.ablation[cleanWord];
-
-                    // Style by priority
-                    if (cleanWord === 'tyranny' || cleanWord === 'propaganda' || cleanWord === 'hostile') {
-                        span.className += ' ablatable influence-high';
-                    } else {
-                        span.className += ' ablatable influence-med';
-                    }
-
-                    span.addEventListener('click', () => {
-                        selectTokenAblation(cleanWord, info);
-                    });
-                }
-
-                wsAblationText.appendChild(span);
-            });
-
-            // Auto-select first ablatable token if exists
-            if (art.ablation && Object.keys(art.ablation).length > 0) {
-                const firstKey = Object.keys(art.ablation)[0];
-                selectTokenAblation(firstKey, art.ablation[firstKey]);
-            } else {
-                wsAblationWord.textContent = "none";
-                wsAblationDesc.textContent = "No highly influential emotion or bias driver tokens identified in this text body.";
-                wsStatAnger.textContent = "0.00";
-                wsStatDisgust.textContent = "0.00";
-                wsStatBias.textContent = "0.00";
+        function getBiasState(bias) {
+            if (bias.prob_biased >= 0.4 && bias.prob_biased <= 0.6) {
+                return {
+                    state: 'uncertain',
+                    label: 'UNCERTAIN',
+                    badgeClass: 'badge-uncertain'
+                };
             }
-        }
-
-        function selectTokenAblation(word, info) {
-            wsAblationWord.textContent = word;
-            wsAblationDesc.textContent = info.desc;
-            wsStatAnger.textContent = info.stats.anger;
-            wsStatDisgust.textContent = info.stats.disgust;
-            wsStatBias.textContent = info.stats.bias;
-
-            // Dynamic color adjustment
-            const card = document.getElementById('ws-ablation-details');
-            if (word === 'tyranny' || word === 'propaganda' || word === 'hostile') {
-                card.style.background = 'rgba(230, 92, 92, 0.05)';
-                card.style.border = '1px dashed rgba(230, 92, 92, 0.3)';
-                wsAblationWord.style.color = 'var(--accent-tertiary)';
-            } else {
-                card.style.background = 'rgba(217, 167, 82, 0.05)';
-                card.style.border = '1px dashed rgba(217, 167, 82, 0.3)';
-                wsAblationWord.style.color = 'var(--accent-primary)';
+            if (bias.prob_biased > bias.prob_unbiased) {
+                return {
+                    state: 'biased',
+                    label: 'BIASED',
+                    badgeClass: 'badge-biased'
+                };
             }
+            return {
+                state: 'unbiased',
+                label: 'NON-BIASED',
+                badgeClass: 'badge-unbiased'
+            };
         }
 
-        function sleep(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
+        function formatDate(value) {
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
         }
 
-        // Collapsible click trigger
-        wsExpansionHeader.addEventListener('click', () => {
-            wsArticleExpansion.classList.toggle('expanded');
-        });
+        function setLoading(message) {
+            panelEmptyState.classList.add('hidden');
+            panelMainContent.classList.add('hidden');
+            panelLoader.classList.remove('hidden');
+            loaderMessage.textContent = message;
+        }
 
-        // Initialize Search on startup to populate list
-        runSearch();
+        function clearLoading() {
+            panelLoader.classList.add('hidden');
+        }
+
+        function showError(error) {
+            clearLoading();
+            panelMainContent.classList.add('hidden');
+            panelEmptyState.classList.remove('hidden');
+            showListMessage(error.message || 'Request failed.', true);
+        }
+
+        function showListMessage(message, isError = false) {
+            newsResultsList.innerHTML = '';
+            const box = document.createElement('div');
+            box.className = `message-box${isError ? ' error' : ''}`;
+            box.textContent = message;
+            newsResultsList.appendChild(box);
+        }
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = value || '';
+            return div.innerHTML;
+        }
+
+        refreshStatus();
     </script>
 </body>
 

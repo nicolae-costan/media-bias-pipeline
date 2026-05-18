@@ -127,4 +127,3 @@ class AnalyzedNewsArticle(BaseModel):
 class NewsAnalyzeResponse(BaseModel):
     total_results: int
     articles: list[AnalyzedNewsArticle]
-

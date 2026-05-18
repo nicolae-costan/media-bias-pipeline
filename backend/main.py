@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import get_settings
@@ -40,6 +42,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/demo", include_in_schema=False)
+def demo() -> FileResponse:
+    return FileResponse(Path(__file__).resolve().parent.parent / "demo.html")
 
 
 @app.get("/health", response_model=HealthResponse)
