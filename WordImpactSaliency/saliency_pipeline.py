@@ -15,41 +15,19 @@ class SaliencyPipeline:
         self.model_service = model_service
         
         if model_service is None:
-            try:
-                settings = get_settings()
-                # Verify checkpoints exist before attempting to load ModelService
-                bias_path = Path(settings.bias_checkpoint_path) if settings.bias_checkpoint_path else None
-                emo_path = Path(settings.emotion_checkpoint_path) if settings.emotion_checkpoint_path else None
-                
-                if not bias_path or not bias_path.exists() or not emo_path or not emo_path.exists():
-                    raise RuntimeError("Custom checkpoint weights not found locally")
-                
-                self.model_service = ModelService(settings)
-                self.model_service.load()
-                print("Successfully loaded custom fine-tuned checkpoints for Saliency Analysis.")
-            except Exception as e:
-                print(f"Checkpoints missing or loading failed ({e}). Activating high-fidelity fallback to pre-trained Hugging Face models...")
-                self.fallback_mode = True
-                self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                from transformers import AutoTokenizer, AutoModelForSequenceClassification
-                
-                # Use public pre-trained models with eager attention implementation to force attention matrices output
-                self.bias_tokenizer = AutoTokenizer.from_pretrained("cardiffnlp/twitter-roberta-base-sentiment")
-                self.bias_model = AutoModelForSequenceClassification.from_pretrained(
-                    "cardiffnlp/twitter-roberta-base-sentiment", 
-                    attn_implementation="eager"
-                ).to(self.device)
-                self.bias_model.eval()
-                
-                self.emotion_tokenizer = AutoTokenizer.from_pretrained("j-hartmann/emotion-english-distilroberta-base")
-                self.emotion_model = AutoModelForSequenceClassification.from_pretrained(
-                    "j-hartmann/emotion-english-distilroberta-base",
-                    attn_implementation="eager"
-                ).to(self.device)
-                self.emotion_model.eval()
-                
-                # j-hartmann model emotion labels: ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
-                self.fallback_emo_labels = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
+            settings = get_settings()
+            # Verify checkpoints exist before attempting to load ModelService
+            bias_path = Path(settings.bias_checkpoint_path) if settings.bias_checkpoint_path else None
+            emo_path = Path(settings.emotion_checkpoint_path) if settings.emotion_checkpoint_path else None
+            
+            if not bias_path or not bias_path.exists():
+                raise FileNotFoundError(f"Custom bias checkpoint not found locally at: {bias_path}")
+            if not emo_path or not emo_path.exists():
+                raise FileNotFoundError(f"Custom emotion checkpoint not found locally at: {emo_path}")
+            
+            self.model_service = ModelService(settings)
+            self.model_service.load()
+            print("Successfully loaded custom fine-tuned checkpoints for Saliency Analysis.")
 
     @torch.inference_mode()
     def analyze_text_saliency(self, text: str, max_ablation_words: int = 5) -> dict:
@@ -68,9 +46,9 @@ class SaliencyPipeline:
             )
             bias_input_ids = bias_tokenized["input_ids"].to(self.model_service.device)
             bias_attention_mask = bias_tokenized["attention_mask"].to(self.model_service.device)
-            bias_logits = self.model_service.bias_model.model(
+            bias_logits = self.model_service.bias_model(
                 input_ids=bias_input_ids, attention_mask=bias_attention_mask
-            ).logits
+            )
             bias_probs = F.softmax(bias_logits, dim=-1).cpu()[0]
             base_bias_score = float(bias_probs[1].item())
 
@@ -80,9 +58,9 @@ class SaliencyPipeline:
             )
             emo_input_ids = emo_tokenized["input_ids"].to(self.model_service.device)
             emo_attention_mask = emo_tokenized["attention_mask"].to(self.model_service.device)
-            emo_logits = self.model_service.emotion_model.model(
+            emo_logits = self.model_service.emotion_model(
                 input_ids=emo_input_ids, attention_mask=emo_attention_mask
-            ).logits
+            )
             emo_probs = torch.sigmoid(emo_logits).cpu()[0]
             base_emotions = {
                 label: float(emo_probs[i].item())
@@ -218,8 +196,12 @@ class SaliencyPipeline:
             )
             m_bias_input = {k: v.to(device) for k, v in m_bias_tok.items()}
             m_bias_outs = bias_model(**m_bias_input)
-            m_bias_probs = F.softmax(m_bias_outs.logits, dim=-1).cpu()[0]
-            masked_bias_score = float(m_bias_probs[0].item() if self.fallback_mode else m_bias_probs[1].item())
+            if self.fallback_mode:
+                m_bias_probs = F.softmax(m_bias_outs.logits, dim=-1).cpu()[0]
+                masked_bias_score = float(m_bias_probs[0].item())
+            else:
+                m_bias_probs = F.softmax(m_bias_outs, dim=-1).cpu()[0]
+                masked_bias_score = float(m_bias_probs[1].item())
             bias_delta = base_bias_score - masked_bias_score
 
             # B. Masked Emotion prediction
@@ -228,7 +210,10 @@ class SaliencyPipeline:
             )
             m_emo_input = {k: v.to(device) for k, v in m_emo_tok.items()}
             m_emo_outs = emotion_model(**m_emo_input)
-            m_emo_probs = F.softmax(m_emo_outs.logits, dim=-1).cpu()[0] if self.fallback_mode else torch.sigmoid(m_emo_outs.logits).cpu()[0]
+            if self.fallback_mode:
+                m_emo_probs = F.softmax(m_emo_outs.logits, dim=-1).cpu()[0]
+            else:
+                m_emo_probs = torch.sigmoid(m_emo_outs).cpu()[0]
             
             emotion_deltas = {}
             if self.fallback_mode:

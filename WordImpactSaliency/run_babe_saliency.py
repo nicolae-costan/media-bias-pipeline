@@ -47,13 +47,21 @@ def main():
         **{f"{emo}_drop": 0.0 for emo in EMOTION_LABELS}
     })
 
-    # Stopwords list to ignore trivial structural words in final statistics
-    STOPWORDS = {
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", 
-        "is", "are", "was", "were", "of", "to", "it", "that", "this", "these", "those",
-        "they", "them", "their", "he", "she", "his", "her", "we", "our", "you", "your",
-        "as", "by", "from", "at", "about", "has", "have", "had", "been", "would", "could", "should"
-    }
+    # Load NLTK English stopwords dynamically
+    print("Loading NLTK English stopwords...")
+    try:
+        import nltk
+        nltk.download('stopwords', quiet=True)
+        from nltk.corpus import stopwords
+        STOPWORDS = set(stopwords.words('english'))
+    except ImportError:
+        print("Warning: nltk library not found. Falling back to a standard English stopword list.")
+        STOPWORDS = {
+            "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "with", 
+            "is", "are", "was", "were", "of", "to", "it", "that", "this", "these", "those",
+            "they", "them", "their", "he", "she", "his", "her", "we", "our", "you", "your",
+            "as", "by", "from", "at", "about", "has", "have", "had", "been", "would", "could", "should"
+        }
 
     # 4. Processing Loop
     print(f"\nProcessing {len(articles)} articles...")
@@ -119,9 +127,13 @@ def main():
     print(f"Global Word Saliency Database successfully saved to: {args.output}")
     print(f"Total unique words compiled: {len(df_output):,}")
     
-    # Display top 10 words
+    # Display top 10 words with both bias and emotion drops
     print("\n--- Top 10 Most Influential Words in Dataset ---")
-    print(df_output.head(10)[["word", "occurrences", "avg_attention", "avg_bias_drop"]])
+    cols_to_display = ["word", "occurrences", "avg_attention", "avg_bias_drop"] + [f"avg_{emo}_drop" for emo in EMOTION_LABELS]
+    # Set pandas display options so all columns print nicely without wrapping
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.width', 1000)
+    print(df_output.head(10)[cols_to_display])
 
 if __name__ == "__main__":
     main()
