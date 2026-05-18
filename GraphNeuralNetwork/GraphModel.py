@@ -74,6 +74,10 @@ class GraphBiasLabels(pl.LightningModule):
         )
 
         # --- GAT layers + per-layer LayerNorm ---
+        # edge_dim=1 lets each layer condition its attention scores on the
+        # cosine-similarity weight stored in data.edge_attr. Without this,
+        # the model treats a 0.95-similar neighbor identically to a 0.55-
+        # similar one — wasted signal given the new high-recall edge set.
         self.gat_layers = nn.ModuleList()
         self.gat_norms = nn.ModuleList()
         for _ in range(hp.number_gat_layers):
@@ -85,6 +89,7 @@ class GraphBiasLabels(pl.LightningModule):
                     concat=True,
                     dropout=hp.dropout,
                     add_self_loops=True,
+                    edge_dim=1,
                 )
             )
             self.gat_norms.append(nn.LayerNorm(hp.hidden_dim))
@@ -108,31 +113,49 @@ class GraphBiasLabels(pl.LightningModule):
     # Forward
     # -------------------------------------------------------------------------
 
-    def forward(self, x, emotions, edge_index):
+    def forward(self, x, emotions, edge_index, edge_attr=None):
         h = self.pre_gat_linear(
             torch.cat([self.cls_proj(x), self.emo_proj(emotions)], dim=-1)
         )
         for gat, norm in zip(self.gat_layers, self.gat_norms):
             h = norm(
-                F.dropout(gat(h, edge_index), p=self.hparams.dropout, training=self.training) + h
+                F.dropout(
+                    gat(h, edge_index, edge_attr=edge_attr),
+                    p=self.hparams.dropout,
+                    training=self.training,
+                ) + h
             )
         return self.classifier(self.bottleneck(h))
 
     @staticmethod
-    def _split_edge_index(edge_index: torch.Tensor, node_mask: torch.Tensor) -> torch.Tensor:
-        """Keep only edges whose source and destination are both inside node_mask."""
+    def _split_edge_index(edge_index, node_mask, edge_attr=None):
+        """
+        Keep only edges whose source and destination are both inside node_mask.
+        If `edge_attr` is provided, it is filtered with the same boolean mask
+        so the two tensors stay aligned. Returns either the filtered edge_index
+        alone (when edge_attr is None) or a (edge_index, edge_attr) tuple.
+        """
         if edge_index.numel() == 0:
-            return edge_index
+            return (edge_index, edge_attr) if edge_attr is not None else edge_index
 
         node_mask = node_mask.to(device=edge_index.device, dtype=torch.bool)
         src, dst = edge_index
         keep = node_mask[src] & node_mask[dst]
-        return edge_index[:, keep]
+        filtered_ei = edge_index[:, keep]
+        if edge_attr is None:
+            return filtered_ei
+        return filtered_ei, edge_attr[keep]
 
-    def _edge_index_for_mask(self, data, mask):
+    def _edges_for_mask(self, data, mask):
+        """
+        Returns the (edge_index, edge_attr) pair for the current mask, honoring
+        `hparams.strict_split_edges`. Use this everywhere instead of touching
+        `data.edge_index` directly so the two tensors are always kept aligned.
+        """
+        edge_attr = getattr(data, "edge_attr", None)
         if getattr(self.hparams, "strict_split_edges", True):
-            return self._split_edge_index(data.edge_index, mask)
-        return data.edge_index
+            return self._split_edge_index(data.edge_index, mask, edge_attr)
+        return data.edge_index, edge_attr
 
     # -------------------------------------------------------------------------
     # Loss
@@ -180,13 +203,15 @@ class GraphBiasLabels(pl.LightningModule):
             ],
             weight_decay=hp.weight_decay,
         )
+        # Note: the `verbose` kwarg was removed from ReduceLROnPlateau in
+        # newer PyTorch versions. LR changes are still visible via the
+        # logged learning rate (LearningRateMonitor / PL's lr logging).
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer,
             mode="max",
             patience=hp.scheduler_patience,
             factor=hp.scheduler_factor,
             min_lr=hp.min_lr,
-            verbose=True,
         )
         return {
             "optimizer": optimizer,
@@ -204,7 +229,11 @@ class GraphBiasLabels(pl.LightningModule):
             if not os.path.exists(self.hparams.graph_path):
                 log.info("Graph not found, building using build_graph.py...")
                 os.system("python build_graph.py")
-            self.graph_data = torch.load(self.hparams.graph_path)
+            # weights_only=False is required for PyG `Data` objects, which
+            # contain custom classes (DataEdgeAttr, DataTensorAttr) not in
+            # PyTorch 2.6+'s default safe-globals list. The file is produced
+            # locally by build_graph.py in this same project, so it's trusted.
+            self.graph_data = torch.load(self.hparams.graph_path, weights_only=False)
             self.train_data = self.graph_data.train_mask
             self.val_data = self.graph_data.val_mask
             self.predict_data = self.graph_data.test_mask
@@ -217,20 +246,35 @@ class GraphBiasLabels(pl.LightningModule):
 
     def training_step(self, batch, batch_idx=0):
         data = batch
-        edge_index = self._edge_index_for_mask(data, data.train_mask)
-        logits = self(data.x, data.emotions, edge_index)
+        edge_index, edge_attr = self._edges_for_mask(data, data.train_mask)
+        logits = self(data.x, data.emotions, edge_index, edge_attr=edge_attr)
         loss = self.loss(logits, data.y, data.label_weights, data.train_mask)
-        
+
         output = {"loss": loss}
         self.training_step_outputs.append(output)
         return output
 
     @torch.no_grad()
-    def _evaluate(self, data, mask, use_split_edges: bool = True):
-        """Shared evaluation logic for val and test masks."""
+    def _evaluate(self, data, mask, use_split_edges=None):
+        """
+        Shared evaluation logic for val and test masks.
+
+        `use_split_edges` defaults to `self.hparams.strict_split_edges` so that
+        the eval-time topology matches the train-time topology. Passing the
+        flag explicitly here (instead of letting `use_split_edges=True` win)
+        was the bug behind earlier '--no-strict_split_edges' runs appearing
+        to "do nothing": training saw the full graph, but val/test still saw
+        only within-mask edges, so the reported metrics never moved.
+        """
+        if use_split_edges is None:
+            use_split_edges = bool(getattr(self.hparams, "strict_split_edges", True))
         self.eval()
-        edge_index = self._split_edge_index(data.edge_index, mask) if use_split_edges else data.edge_index
-        logits = self(data.x, data.emotions, edge_index)
+        edge_attr = getattr(data, "edge_attr", None)
+        if use_split_edges:
+            edge_index, edge_attr = self._split_edge_index(data.edge_index, mask, edge_attr)
+        else:
+            edge_index = data.edge_index
+        logits = self(data.x, data.emotions, edge_index, edge_attr=edge_attr)
         preds = logits.argmax(dim=-1)
         step_loss = self.loss(logits, data.y, data.label_weights, mask)
 
@@ -315,8 +359,9 @@ class GraphBiasLabels(pl.LightningModule):
         x = data.x.to(device)
         emotions = data.emotions.to(device)
         edge_index = data.edge_index.to(device)
-        
-        logits = self(x, emotions, edge_index)
+        edge_attr = data.edge_attr.to(device) if getattr(data, "edge_attr", None) is not None else None
+
+        logits = self(x, emotions, edge_index, edge_attr=edge_attr)
         preds = logits.argmax(dim=-1)
         
         # Unlabeled articles have y == -1
@@ -363,7 +408,10 @@ class GraphBiasLabels(pl.LightningModule):
         parser.add_argument("--number_gat_layers", type=int, default=2)
         parser.add_argument("--gat_heads", type=int, default=4)
         parser.add_argument("--num_classes", type=int, default=2)
-        parser.add_argument("--dropout", type=float, default=0.2)
+        # Bumped from 0.2 → 0.4: previous runs showed a 3.4× train/val loss
+        # gap (train 0.25 vs val 0.87), classic overfit signature on a 2.3K
+        # train set. More dropout closes that gap.
+        parser.add_argument("--dropout", type=float, default=0.4)
 
         # Loss
         parser.add_argument("--label_smoothing", type=float, default=0.05)
@@ -371,7 +419,8 @@ class GraphBiasLabels(pl.LightningModule):
         # Optimizer
         parser.add_argument("--lr_proj", type=float, default=1e-3)
         parser.add_argument("--lr_gat", type=float, default=5e-4)
-        parser.add_argument("--weight_decay", type=float, default=1e-4)
+        # Bumped from 1e-4 → 5e-4 for the same overfit reason as dropout.
+        parser.add_argument("--weight_decay", type=float, default=5e-4)
 
         # Scheduler
         parser.add_argument("--scheduler_patience", type=int, default=10)

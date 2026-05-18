@@ -14,6 +14,7 @@ a tiny list-dataset so PL can iterate over it.
 import argparse
 import logging
 import os
+import warnings
 
 import torch
 from torch_geometric.data import Data
@@ -26,6 +27,12 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from GraphModel import GraphBiasLabels
+
+# Silence PL's `num_workers` recommendation: this is a transductive single-graph
+# setup with exactly one "batch" per epoch (the whole graph), so multi-worker
+# loading would not help and would in fact add IPC overhead. We match on the
+# message text only — the warning category has moved between PL versions.
+warnings.filterwarnings("ignore", message=".*does not have many workers.*")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,6 +96,10 @@ def get_args():
                         help="EarlyStopping patience (epochs); 0 to disable")
     parser.add_argument("--resume_ckpt",     type=str,   default=None,
                         help="Path to a checkpoint to resume training from")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Seed for torch / numpy / python — set for reproducible runs")
+    parser.add_argument("--grad_clip_val", type=float, default=1.0,
+                        help="Trainer gradient_clip_val (0 to disable)")
 
     # Let the model declare its own hyperparameters
     parser = GraphBiasLabels.add_model_specific_args(parser)
@@ -102,6 +113,20 @@ def get_args():
 
 def main():
     args = get_args()
+
+    # ------------------------------------------------------------------
+    # 0. Reproducibility + Tensor-Cores fast path
+    # ------------------------------------------------------------------
+    # Seed everything (python, numpy, torch, cuda) so two runs with the same
+    # args produce comparable numbers. Without this you can't tell whether a
+    # code change moved the metric or you just got a lucky init.
+    pl.seed_everything(args.seed, workers=True)
+
+    # Silence the Tensor Cores warning + actually use them. 'high' keeps
+    # float32 matmul accurate enough for our scale while picking up the
+    # speed of TF32 on Ampere/Ada GPUs.
+    if torch.cuda.is_available():
+        torch.set_float32_matmul_precision("high")
 
     # ------------------------------------------------------------------
     # 1. Load graph
@@ -118,6 +143,22 @@ def main():
         f"train: {graph.train_mask.sum():,} | val: {graph.val_mask.sum():,} | "
         f"test: {graph.test_mask.sum():,}"
     )
+
+    # Class-balance sanity check on the train split — a heavily skewed split
+    # would make 'accuracy' meaningless and explain a stuck-looking model.
+    for split_name, mask in (("train", graph.train_mask),
+                             ("val",   graph.val_mask),
+                             ("test",  graph.test_mask)):
+        y = graph.y[mask & (graph.y != -1)]
+        if y.numel() == 0:
+            continue
+        n_pos = int((y == 1).sum())
+        n_neg = int((y == 0).sum())
+        majority = max(n_pos, n_neg) / max(n_pos + n_neg, 1)
+        log.info(
+            f"{split_name:>5s} balance — Non-biased: {n_neg:>5d} | "
+            f"Biased: {n_pos:>5d} | majority-baseline acc: {majority:.3f}"
+        )
 
     # ------------------------------------------------------------------
     # 2. Inject input dims from graph (avoid shape mismatches)
@@ -190,6 +231,13 @@ def main():
         callbacks=callbacks,
         logger=tb_logger,
         log_every_n_steps=1,
+        # Gradient clipping: cheap insurance against GAT attention blow-ups
+        # on a small graph; set --grad_clip_val 0 to disable.
+        gradient_clip_val=args.grad_clip_val if args.grad_clip_val > 0 else None,
+        # cudnn benchmark mode for fixed-shape graphs — we always pass the same
+        # tensor shapes through the model, so let cudnn pick the fastest kernels.
+        benchmark=True,
+        deterministic=False,  # set True for strict reproducibility at a speed cost
         enable_progress_bar=True,
         enable_model_summary=True,
     )
