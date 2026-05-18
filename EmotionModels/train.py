@@ -2,6 +2,7 @@
 Runs a model on a single node across N-gpus using TensorBoard for local logging.
 """
 import os
+import torch
 from pathlib import Path
 
 from pytorch_lightning import Trainer, seed_everything
@@ -17,6 +18,9 @@ def main(hparams) -> None:
     """
     Main training routine.
     """
+    # Use Tensor Cores on Ampere/Ada GPUs for ~20 % speedup with minimal accuracy loss
+    torch.set_float32_matmul_precision('high')
+
     seed_everything(hparams.seed)
 
     # ------------------------
