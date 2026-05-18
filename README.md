@@ -1,188 +1,167 @@
-# Media Bias and Semantic Analysis Pipeline
+# Media Bias & Emotion Prediction Pipeline
 
-A state-of-the-art multi-stage machine learning pipeline combining **Deep Transformers (BERT/RoBERTa)** and **Graph Attention Networks (GAT)** to analyze, classify, and interpret media bias and emotional signaling in journalism and social media text.
+A full-stack machine-learning pipeline that detects political bias and emotional framing in news articles. It combines **fine-tuned Transformers (BERT / RoBERTa)** for text understanding with a **Graph Attention Network (GAT)** that propagates labels across a similarity graph of articles, all backed by a **PostgreSQL + pgvector** store for dense retrieval.
 
----
-
-## 🚀 Quick Start (Database Layer Setup)
-
-The database layer utilizes a containerized **PostgreSQL** deployment configured with the **`pgvector`** extension to handle dense vector storage and high-speed similarity indexing.
-
-1.  **Initialize the database container:**
-    ```bash
-    chmod +x ./start_db.sh
-    ./start_db.sh
-    ```
-2.  **Initialize the database schema (Tables, Keys, and HNSW indexes):**
-    ```bash
-    python GraphNeuralNetwork/setup_db.py
-    ```
-
----
-
-## 📂 Project Architecture Overview
-
-*   **`utils/`**: Distributed data preprocessing routines using the **PySpark** engine to resolve consensus annotations (SG1/SG2) via majority voting.
-*   **`GraphNeuralNetwork/`**: Semi-supervised node classification using Graph Attention Networks (GAT) trained on semantic similarity and emotional distributions of news articles.
-*   **`EmotionModels/`**: Fine-tuned multi-label transformer models (using Asymmetric Loss and optimal classification thresholds) to detect emotional signals in media.
-*   **`SentimentClassification/`**: Baseline multi-task continuous regression models (BERT/RoBERTa) trained on Reddit "Us vs Them" data to represent continuous ideological polarity.
-
----
-
-## 📊 Interpretability & Influence Analysis
-
-To analyze the semantic decision boundaries of fine-tuned models, run the token-level ablation (masking) interpreter:
-
-1.  **Extract Word Influences from the Emotion Classifier:**
-    ```bash
-    python interpret_models.py --model_type emotion --checkpoint "path/to/emotion.ckpt"
-    ```
-2.  **Extract Word Influences from the Baseline Bias Classifier:**
-    ```bash
-    python interpret_models.py --model_type bias --checkpoint "path/to/bias.ckpt"
-    ```
-
----
-
-## 🛠️ Detailed Documentation
-
-*   [**Technical Architecture Overview**](ARCHITECTURE_OVERVIEW.md): Comprehensive system maps and data structures.
-*   [**Database Architecture Migration**](DATABASE_MIGRATION_REPORT.md): Relational pgvector design and schema breakdown.
-*   [**Codebase Deep Dive**](codebase_explanation.md): Step-by-step logic walks through the codebase.
-# Media Bias Pipeline
-
-> A full-stack AI pipeline that detects political and ideological bias in news articles — from raw text to cross-platform visualization.
+The repository is structured so that each stage of the pipeline can be trained, tested, and inspected independently, and then composed end-to-end.
 
 ---
 
 ## Project Vision
 
-The media landscape is increasingly polarized. This project builds an end-to-end system that **automatically detects, quantifies, and visualizes media bias** in news articles. Rather than relying on hand-crafted rules, every component is powered by machine learning — from emotion detection to graph-based reasoning and final prediction.
+Modern media is increasingly polarized, and detecting bias is harder than detecting tone alone — biased writing is often a function of *what is emphasized*, *which social groups are implicated*, and *how the article relates to other coverage*, not just the words on the page. This pipeline tackles all three:
 
-The pipeline is composed of four major stages:
+1. **Emotion models** capture *how* an article is written.
+2. **Graph-based learning** captures *how it relates to other articles*.
+3. **A final bias classifier** fuses both signals into a single calibrated score.
+
+---
+
+## Architecture at a Glance
 
 ```
-News Article
-    |
-    v
-[1] Emotion & Sentiment Classification
-    |       (BERT / RoBERTa fine-tuned on Reddit comments)
-    v
-[2] Graph Neural Network (Semi-Supervised Bias Propagation)
-    |       (GNN trained on entity/article relationship graphs)
-    v
-[3] Media Bias Prediction Model
-    |       (Final bias score aggregation and classification)
-    v
-[4] FastAPI Backend  ────────►  C# MAUI Frontend
-        (REST API)               (News API integration + UI)
+              Raw news articles + annotations
+                              |
+                              v
+       utils/  -  PySpark consensus merge (SG1 + SG2)
+                              |
+                              v
+       EmotionModels/  -  7-class emotion classifier
+            (Asymmetric Loss + optimized thresholds)
+                              |
+                              v
+       GraphNeuralNetwork/
+         - article_embeddings.py  -> pgvector store
+         - build_graph.py         -> graph.pt (PyG Data)
+         - GraphModel.py / train  -> semi-supervised GAT
+                              |
+                              v
+       BiasTransformer/  -  final bias prediction head
+       interpret_models.py  -  token-level ablation
 ```
 
 ---
 
-## Stage 1 — Emotion & Sentiment Classification
+## Pipeline Stages
 
-**Location:** `SentimentClassification/`, `EmotionModels/`
+### Stage 1 — Data preparation & consensus labeling
+**Location:** `utils/`, `merge_sg.py`, `data/`
 
-The first stage of the pipeline teaches the system to understand the *tone* and *emotional content* of text. This is crucial because biased language is often characterized by strong, one-sided emotional framing.
+Raw annotations come from two annotator groups (SG1, SG2). A PySpark job merges them and computes per-article majority labels along with an *agreement* score that is later used to gate training/validation masks. The output is `data/consensus_labels_sg1_sg2.csv`.
 
-### What we built: 
-We constructed 2 models one that has a task to predict the social group and another that has only the task to predict the emotions from the us vs them dataset
-SentimentClassification is also able to predict the social group but it struggles on sentiment classification so we constructed another model to only predict emotions 
-- Fine-tuned a **BERT** and **RoBERTa** model on a Reddit dataset annotated with "Us vs. Them" bias scores.
-- Used **Multi-Task Learning (MTL)**: the model simultaneously predicts:
-  - A **bias score** (continuous float, 0.0–1.0) — how much "Us vs. Them" framing is present.
-  - **13 emotion categories** (Anger, Contempt, Disgust, Fear, Gratitude, etc.) — multi-label classification.
-  - The **social group** being targeted (e.g., Refugees, Immigrants, Liberals).
-- The Transformer backbone is **forked at the last layer**: the first 11 layers are shared across all tasks, and the 12th layer is independently duplicated per task. This lets each head specialize while still sharing a common language understanding.
-- Trained with **GradNorm**, a technique that dynamically re-weights the loss of each task during backpropagation to prevent any single task from dominating the gradient signal.
-- Emotion model checkpoints and threshold optimization live in `EmotionModels/`.
+### Stage 2 — Emotion classification
+**Location:** `EmotionModels/`
 
----
+A multi-task Transformer (BERT / RoBERTa) is fine-tuned on the *Us vs. Them* dataset. The backbone is shared across tasks, and the last layer is forked into three heads: a continuous bias score, multi-label emotion classification (7 categories), and social-group prediction. Class imbalance in the emotion head is handled with **Asymmetric Loss** and per-class **threshold optimization** (`optimize_thresholds.py` -> `thresholds.json`). Multi-task gradient balancing is done with **GradNorm**.
 
-## Stage 2 — Graph Neural Network (Semi-Supervised Learning)
-
+### Stage 3 — Graph construction & embeddings
 **Location:** `GraphNeuralNetwork/`
 
-Raw text classification has limits — an article's bias is not just a function of its words, but also of *who wrote it*, *what outlet published it*, and *how it relates to other articles*. Stage 2 builds a knowledge graph of these relationships and uses a **Graph Neural Network (GNN)** to propagate bias labels across the graph in a semi-supervised fashion.
+Each article is embedded with the fine-tuned Transformer and stored as a dense vector in **PostgreSQL** with the **pgvector** extension and **HNSW** indexes for fast similarity retrieval. `build_graph.py` queries pgvector to find each article's top-*k* semantically similar neighbors, optionally filtered by a cosine threshold, and assembles a PyTorch Geometric `Data` object (`graph.pt`). Train / val / test masks are seeded from annotator agreement.
 
-### What we built:
-- **Article Embeddings**: Each article is embedded using the fine-tuned Transformer from Stage 1, capturing its semantic content and emotional tone.
-- **Graph Construction**: A graph is built where nodes are articles. Edges represent relationships (same emotional tones and emotion scores).
-- **Semi-Supervised GNN**: Only a fraction of articles are labeled. The GNN propagates these labels to unlabeled nodes by learning from the graph structure.
-- This approach dramatically reduces the need for hand-labeled data, which is expensive and time-consuming in the media domain.
+### Stage 4 — Semi-supervised GNN
+**Location:** `GraphNeuralNetwork/GraphModel.py`, `train.py`
 
----
+A **Graph Attention Network** is trained transductively on the single article graph. Because only a fraction of articles carry trustworthy labels, the GAT propagates information from labeled to unlabeled nodes through learned edge attention. A **Random Forest baseline** (`random_forest_baseline.py`) provides a non-graph reference point.
 
-## Stage 3 — Media Bias Prediction Model
+### Stage 5 — Final bias classifier
+**Location:** `BiasTransformer/`
 
+The bias head consumes both the article text and pseudo-labels generated by the GNN (`graph_pseudo_labels.py`) and is fine-tuned in two stages: a pretrain pass on graph-derived labels, then a supervised pass on the gold consensus labels.
 
+### Stage 6 — Interpretability
+**Location:** `interpret_models.py`
 
-## Stage 4 — FastAPI Backend + C# MAUI Frontend
-
-**Location:** `FrontEnd/MediaBiasApp/`
-
-The final stage brings everything together in a polished, cross-platform user experience.
-
-### FastAPI Backend
-- Wraps the trained bias prediction model in a **FastAPI** REST endpoint.
-- Accepts a news article URL or text body as input and returns:
-  - A bias score.
-  - A breakdown of detected emotions.
-  - The predicted political leaning.
-- Designed to be lightweight and deployable as a Docker container or cloud function.
-
-### C# MAUI Frontend (fronte
-- A **cross-platform app** built with .NET MAUI, targeting Windows, Android, and iOS from a single codebase.
-- Integrates with a **News API** to fetch live, real-time news headlines and articles.
-- Users can browse the latest news, select an article, and trigger a bias analysis query against the FastAPI backend.
-- Results are displayed with intuitive visualizations (bias meters, emotion breakdowns, source credibility ratings).
+A token-level ablation interpreter masks each token in turn and measures the resulting change in prediction, producing per-word influence scores for any emotion or bias checkpoint.
 
 ---
 
-## Repository Structure
+## Repository Layout
 
 ```
 media-bias-pipeline/
-|
-├── SentimentClassification/     # BERT/RoBERTa training pipeline
-│   ├── train.py                 # Entry point — CLI-driven training
-│   ├── dataloader.py            # Dataset + tokenization collator
-│   ├── BertRegression.py        # BERT Lightning module
-│   ├── RoBERTaRegression.py     # RoBERTa Lightning module
-│   ├── RedditTransformer.py     # Custom forked BERT architecture
-│   └── RoBERTaMTL.py            # Custom forked RoBERTa architecture
-|
-├── EmotionModels/               # Emotion classification & threshold tuning
-|
-├── GraphNeuralNetwork/          # GNN models, graph construction, embeddings
-|
-├── FrontEnd/
-│   └── MediaBiasApp/            # .NET MAUI cross-platform app (C#)
-|
-├── utils/                       # Shared utilities
-├── tb_logs/                     # TensorBoard training logs
-├── MediaBiasPipeline.slnx       # Visual Studio solution file
-└── README.md
+- BiasTransformer/         # Final bias classifier (two-stage training)
+    - train.py, test.py, model.py, dataloader.py
+    - prepare_data.py      # Generates pretrain/finetune splits
+    - graph_pseudo_labels.py
+- EmotionModels/           # 7-class emotion model + threshold tuning
+    - train.py, test.py, model.py, dataloader.py
+    - optimize_thresholds.py
+    - thresholds.json
+- GraphNeuralNetwork/      # GAT, embeddings, pgvector setup
+    - setup_db.py          # Creates tables + HNSW indexes
+    - article_embeddings.py
+    - build_graph.py       # -> graph.pt
+    - GraphModel.py, train.py, test.py
+    - random_forest_baseline.py
+- utils/                   # PySpark consensus merge
+- data/                    # CSV annotations & processed splits
+- merge_sg.py              # Entry point for the consensus job
+- interpret_models.py      # Token-ablation interpreter
+- docker-compose.yml       # Postgres + pgvector container
+- start_db.sh              # Cross-platform Docker bootstrap
+- requirements.txt         # Consolidated Python dependencies
+- .env                     # Local config (git-ignored)
+- PIPELINE.md              # End-to-end run commands
+- README.md                # (this file)
 ```
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| NLP Models | Python, PyTorch, PyTorch Lightning, HuggingFace Transformers |
-| Graph Learning | PyTorch Geometric / DGL |
-| API Backend | FastAPI, Uvicorn |
-| Frontend | .NET MAUI (C#), News API |
-| Monitoring | TensorBoard |
-| Database | PostgreSQL |
-| Deployment | Docker, WSL2 |
+| Layer            | Technology                                                  |
+|------------------|-------------------------------------------------------------|
+| Deep learning    | PyTorch, PyTorch Lightning                                  |
+| NLP              | HuggingFace Transformers, BERT, RoBERTa                     |
+| Graph learning   | PyTorch Geometric (GAT)                                     |
+| Big data         | PySpark (consensus aggregation)                             |
+| Storage          | PostgreSQL 16 + pgvector (HNSW indexes)                     |
+| Experiment infra | TensorBoard, test-tube hyperparameter search                |
+| Container        | Docker / Docker Compose                                     |
+| Interpretability | Custom token-ablation routine (`interpret_models.py`)       |
 
 ---
 
-## Further Reading
+## Quick Start
 
-- [Project Overview](PROJECT_OVERVIEW.md) — Dataset schema, model breakdown, and CLI flags.
-- [Code Walkthrough](CODE_WALKTHROUGH.md) — Deep-dive implementation guide for the NLP pipeline.
+```bash
+# 1. Clone & install
+git clone <repo-url> && cd media-bias-pipeline
+python -m venv venv && source venv/bin/activate    # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# 2. Configure environment
+cp .env .env.local   # then edit DB_PASSWORD etc. if needed
+
+# 3. Start Postgres + pgvector
+chmod +x ./start_db.sh && ./start_db.sh
+python GraphNeuralNetwork/setup_db.py
+```
+
+The full command list — data prep, training, graph construction, GNN, evaluation, interpretability — lives in **[PIPELINE.md](PIPELINE.md)**.
+
+---
+
+## Dataset
+
+The pipeline is built around three data sources, all in `data/`:
+
+- **BABE consensus labels** (`consensus_labels_sg1_sg2.csv`) — gold bias labels derived from SG1/SG2 majority vote.
+- **Raw annotator files** (`raw_labels_SG1.csv`, `raw_labels_SG2.csv`) — individual annotator decisions; used by `merge_sg.py`.
+- **Us vs. Them** Reddit dataset — emotion + social-group annotations used to pretrain the Transformer heads.
+
+---
+
+## Outputs & Artifacts
+
+- `graph.pt` — PyG `Data` object: article embeddings, edges, masks.
+- `graph_model.pt` — Trained GAT weights.
+- `EmotionModels/thresholds.json` — Per-class optimal decision thresholds.
+- `tb_logs/` — TensorBoard logs for every training run (git-ignored).
+- `checkpoints/` — Lightning `.ckpt` files (git-ignored).
+
+---
+
+## License & Citation
+
+Internal research project. If you build on this work, please credit the underlying datasets (BABE, *Us vs. Them*) and the model families (BERT, RoBERTa, GAT).

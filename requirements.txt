@@ -1,0 +1,42 @@
+# =============================================================================
+# Media Bias & Emotion Prediction Pipeline - Consolidated Requirements
+# =============================================================================
+# Covers: BiasTransformer, EmotionModels, GraphNeuralNetwork,
+#         utils, and root-level scripts.
+# =============================================================================
+
+# ---- Core Deep Learning ----------------------------------------------------
+torch
+pytorch-lightning
+torch-geometric
+
+# ---- NLP & Transformers ----------------------------------------------------
+transformers
+datasets
+
+# ---- Data Processing & Math ------------------------------------------------
+pandas
+numpy
+scipy
+scikit-learn
+
+# ---- Database & Vector Store -----------------------------------------------
+psycopg2-binary
+pgvector
+
+# ---- Big Data --------------------------------------------------------------
+pyspark
+
+# ---- Environment & Utilities -----------------------------------------------
+python-dotenv
+tqdm
+test-tube
+
+# ---- Visualization & Interpretability --------------------------------------
+matplotlib
+seaborn
+wordcloud
+
+# ---- Notebooks (optional, for analysis) ------------------------------------
+jupyter
+notebook

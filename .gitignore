@@ -1,52 +1,115 @@
+# =============================================================================
 # Python
-
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+*.egg
+*.egg-info/
+.Python
+build/
+dist/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
 
+# =============================================================================
 # Virtual Environments
-my_env/
+# =============================================================================
 venv/
+my_env/
 env/
 ENV/
 .env
+.venv/
+EmotionModels/.env/
 
-# TensorBoard logs
+# =============================================================================
+# Notebooks
+# =============================================================================
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# =============================================================================
+# Logs & Experiment Tracking
+# =============================================================================
 tb_logs/
-SentimentClassification/tb_logs/
+lightning_logs/
+wandb/
+mlruns/
+*.log
 
-# Generated graph/model artifacts
+# =============================================================================
+# Model Artifacts & Checkpoints
+# =============================================================================
 checkpoints/
-graph.pt
+*.ckpt
 *.pt
+*.pth
+*.bin
+*.safetensors
+graph.pt
 data/bias_transformer/
 
-# IDEs
+# =============================================================================
+# Generated Plots & Outputs
+# =============================================================================
+plots/
+*.png
+*.jpg
+*.jpeg
+*.svg
+!docs/**/*.png
+!docs/**/*.jpg
+
+# =============================================================================
+# Datasets & Caches
+# =============================================================================
+data/raw/
+data/processed/
+data/cache/
+*.csv.gz
+*.parquet
+.cache/
+huggingface/
+transformers_cache/
+
+# =============================================================================
+# Vector Database
+# =============================================================================
+vector_db/chroma.sqlite3
+vector_db/*.bin
+vector_db/index/
+
+# =============================================================================
+# IDEs & Editors
+# =============================================================================
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# Jupyter
-.ipynb_checkpoints/
-### AL ###
-#Template for AL projects for Dynamics 365 Business Central
-#launch.json folder
-.vscode/
-#Cache folder
-.alcache/
-#Symbols folder
-.alpackages/
-#Snapshots folder
-.snapshots/
-#Testing Output folder
-.output/
-#Extension App-file
-*.app
-#Rapid Application Development File
-rad.json
-#Translation Base-file
-*.g.xlf
-#License-file
-*.flf
-#Test results file
-TestResults.xml
-vector_db/chroma.sqlite3
+# =============================================================================
+# OS Files
+# =============================================================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Secrets / Local Config
+# =============================================================================
+.env.local
+.env.*.local
+*.secret
+credentials.json
