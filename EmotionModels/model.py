@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from torch import optim
 from torch.utils.data import DataLoader
 from transformers import get_linear_schedule_with_warmup, AutoModel, AutoConfig
-from sklearn.metrics import jaccard_score
+from sklearn.metrics import jaccard_score, f1_score
 import logging
 import pandas as pd
 import json
@@ -86,34 +86,41 @@ class AsymmetricLoss(nn.Module):
             self.pos_weight = None
 
     def forward(self, logits, targets):
-        # Calculate probabilities
         probs = torch.sigmoid(logits)
-        
+
         # Positive samples
         loss_pos = targets * torch.log(probs.clamp(min=self.eps))
         if self.gamma_pos > 0:
             loss_pos *= (1 - probs) ** self.gamma_pos
-            
+
+        # Apply pos_weight only to the positive term
+        if self.pos_weight is not None:
+            loss_pos = loss_pos * self.pos_weight
+
         # Negative samples
-        # Asymmetric Clipping/Probability shifting (pm)
         probs_neg = 1 - probs
         if self.clip is not None and self.clip > 0:
             probs_neg = (probs_neg + self.clip).clamp(max=1)
-            
+
         loss_neg = (1 - targets) * torch.log(probs_neg.clamp(min=self.eps))
         if self.gamma_neg > 0:
-            # Note: in ASL, we use the shifted probability (probs_neg) for the focusing term
             loss_neg *= (1 - probs_neg) ** self.gamma_neg
-            
+
         loss = -(loss_pos + loss_neg)
-        
-        if self.pos_weight is not None:
-            loss *= self.pos_weight
-            
         return loss.mean()
 
 
-def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
+def compute_weights_from_csv(csv_paths, label_cols, clamp_max=20.0):
+    """Compute per-label positive-class weights from one or more CSV files.
+
+    Args:
+        csv_paths  : list of paths to CSV files that contain the label columns.
+        label_cols : list of column names to treat as binary labels.
+        clamp_max  : maximum allowed weight (prevents extreme gradient spikes).
+
+    Returns:
+        (weight_tensor, total_rows, label_cols)
+    """
 
     dfs = []
 
@@ -124,21 +131,15 @@ def compute_weights_from_csv(csv_paths,clamp_max = 20.0):
             alt_path = os.path.join(project_root, "data", os.path.basename(path))
             if os.path.exists(alt_path):
                 path = alt_path
-        
+
         if os.path.exists(path):
             dfs.append(pd.read_csv(path))
 
     if not dfs:
         log.warning("No csv found")
-        raise Exception("No pandas found")
-    
+        raise Exception(f"No pandas found. Tried: {csv_paths}")
 
-    df_all = pd.concat(dfs,ignore_index=True)
-    label_cols = [
-        'Anger', 'Contempt', 'Disgust', 'Fear', 'Gratitude',
-        'Guilt', 'Happiness', 'Hope', 'Pride', 'Relief',
-        'Sadness', 'Sympathy', 'Emotions_Neutral'
-    ]
+    df_all = pd.concat(dfs, ignore_index=True)
     total = len(df_all)
     weights = []
 
@@ -202,11 +203,19 @@ class EmotionModel(pl.LightningModule):
             config=config,
         )
         hidden_size = config.hidden_size
-        # Fresh 13-class linear head (replaces the discarded pretrained head)
-        self.classifier = nn.Linear(hidden_size, 13)
 
-        pos_weight_13, _, _ = compute_weights_from_csv(
+        # Derive the number of output classes from the dataset definition so the
+        # model works with any label set (7 for combined, 13 for UsVsThem, etc.)
+        from dataloader import RedditDataset
+        num_emotions = len(RedditDataset.EMOTION_COLUMNS)
+        self.num_emotions = num_emotions
+
+        # Fresh N-class linear head
+        self.classifier = nn.Linear(hidden_size, num_emotions)
+
+        pos_weight, _, _ = compute_weights_from_csv(
             [self.hparams.train_csv, self.hparams.dev_csv],
+            label_cols=RedditDataset.EMOTION_COLUMNS,
             clamp_max=getattr(self.hparams, 'focal_weight_clamp', 20.0),
         )
 
@@ -215,33 +224,61 @@ class EmotionModel(pl.LightningModule):
                 gamma_neg=getattr(self.hparams, 'asl_gamma_neg', 4.0),
                 gamma_pos=getattr(self.hparams, 'asl_gamma_pos', 1.0),
                 clip=getattr(self.hparams, 'asl_clip', 0.05),
-                pos_weight=pos_weight_13
+                pos_weight=pos_weight
             )
         else:
             self.loss_fn = FocalLoss(
                 gamma=getattr(self.hparams, 'focal_gamma', 2.0),
-                pos_weight=pos_weight_13,
+                pos_weight=pos_weight,
                 reduction='mean',
             )
 
-        # Default thresholds (0.5 for all 13 nodes)
-        self.register_buffer('thresholds', torch.ones(13, dtype=torch.float) * 0.5)
+        # Default thresholds (0.5 for all emotion nodes)
+        self.register_buffer('thresholds', torch.ones(num_emotions, dtype=torch.float) * 0.5)
+
+        # Freeze the encoder for the first `freeze_epochs` epochs so the
+        # classifier head can warm-start before full fine-tuning begins.
+        self._freeze_encoder_backbone()
 
     def load_thresholds(self, thresholds_path):
         if os.path.exists(thresholds_path):
             with open(thresholds_path, 'r') as f:
                 t_list = json.load(f)
-            if len(t_list) == 13:
+            if len(t_list) == self.num_emotions:
                 self.thresholds = torch.tensor(t_list, dtype=torch.float, device=self.device)
                 print(f"--- Loaded {len(t_list)} thresholds from {thresholds_path} ---")
             else:
-                print(f"--- Warning: Expected 13 thresholds, got {len(t_list)} ---")
+                print(f"--- Warning: Expected {self.num_emotions} thresholds, got {len(t_list)}. Using defaults. ---")
+
+    # ------------------------------------------------------------------ #
+    #  Freeze / unfreeze helpers                                          #
+    # ------------------------------------------------------------------ #
+
+    def _freeze_encoder_backbone(self):
+        """Freeze all encoder (RoBERTa) parameters."""
+        for param in self.model.parameters():
+            param.requires_grad = False
+        log.info("[freeze] Encoder frozen — only classifier head is trainable.")
+
+    def _unfreeze_encoder_backbone(self):
+        """Unfreeze all encoder parameters so the whole model fine-tunes."""
+        for param in self.model.parameters():
+            param.requires_grad = True
+        log.info("[freeze] Encoder unfrozen — full model is now trainable.")
 
     def setup(self, stage: str = None):
         if stage == 'fit':
             self.model.train()
 
     def on_train_epoch_start(self):
+        """Unfreeze the encoder once we have completed `freeze_epochs` epochs."""
+        freeze_epochs = getattr(self.hparams, 'freeze_epochs', 0)
+        if freeze_epochs > 0 and self.current_epoch == freeze_epochs:
+            self._unfreeze_encoder_backbone()
+            log.info(
+                f"[freeze] Epoch {self.current_epoch}: encoder unfrozen after "
+                f"{freeze_epochs} warm-up epoch(s)."
+            )
         self.model.train()
 
     def _safe_squeeze(self, inputs):
@@ -278,19 +315,19 @@ class EmotionModel(pl.LightningModule):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         # Apply MInT: mean of all non-padding token last hidden states
         pooled = self._mean_pooling(outputs.last_hidden_state, attention_mask)
-        # Project to 13 emotion logits
+        # Project to N emotion logits
         return self.classifier(pooled)
 
-    def calculate_loss(self, logits_13, targets_13):
-        loss = self.loss_fn(logits_13, targets_13)
-        return loss, targets_13
+    def calculate_loss(self, logits, targets):
+        loss = self.loss_fn(logits, targets)
+        return loss, targets
 
     def training_step(self, batch, batch_nb):
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_13 = self.forward(input_ids, attention_mask)
-        loss, _ = self.calculate_loss(logits_13, targets['labels_aux'])
+        logits = self.forward(input_ids, attention_mask)
+        loss, _ = self.calculate_loss(logits, targets['labels_aux'])
 
         self.log("train_loss", loss, prog_bar=True, sync_dist=True)
         self.training_step_outputs.append({"loss": loss})
@@ -300,17 +337,17 @@ class EmotionModel(pl.LightningModule):
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_13 = self.forward(input_ids, attention_mask)
-        loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
+        logits = self.forward(input_ids, attention_mask)
+        loss, targets_out = self.calculate_loss(logits, targets['labels_aux'])
 
         # Use custom thresholds if available
-        probs_13 = torch.sigmoid(logits_13)
-        preds_13 = (probs_13 > self.thresholds).float()
+        probs = torch.sigmoid(logits)
+        preds = (probs > self.thresholds).float()
 
         output = {
             "val_loss": loss,
-            "preds": preds_13,
-            "targets": targets_13,
+            "preds": preds,
+            "targets": targets_out,
         }
         self.validation_step_outputs.append(output)
         return output
@@ -318,54 +355,69 @@ class EmotionModel(pl.LightningModule):
     def on_validation_epoch_end(self):
         avg_loss = torch.stack([x["val_loss"] for x in self.validation_step_outputs]).mean()
 
-        all_preds = torch.cat([x["preds"] for x in self.validation_step_outputs], dim=0)
+        all_preds   = torch.cat([x["preds"]   for x in self.validation_step_outputs], dim=0)
         all_targets = torch.cat([x["targets"] for x in self.validation_step_outputs], dim=0)
 
-        all_preds_np = all_preds.cpu().numpy()
+        all_preds_np   = all_preds.cpu().numpy()
         all_targets_np = all_targets.cpu().numpy()
 
+        from dataloader import RedditDataset
+        emotion_names = RedditDataset.EMOTION_COLUMNS
+
+        # ── macro metrics ──────────────────────────────────────────────────
         global_jaccard = jaccard_score(
-            all_targets_np,
-            all_preds_np,
-            average="macro",
-            zero_division=0,
+            all_targets_np, all_preds_np, average="macro", zero_division=0
+        )
+        global_f1 = f1_score(
+            all_targets_np, all_preds_np, average="macro", zero_division=0
         )
 
+        # ── per-class metrics ──────────────────────────────────────────────
         per_class_jaccard = jaccard_score(
-            all_targets_np,
-            all_preds_np,
-            average=None,
-            zero_division=0
+            all_targets_np, all_preds_np, average=None, zero_division=0
+        )
+        per_class_f1 = f1_score(
+            all_targets_np, all_preds_np, average=None, zero_division=0
         )
 
-        # 2. Log each label individually
-        for i, score in enumerate(per_class_jaccard):
-            # Using a prefix like 'val_class_jaccard/' groups them in TensorBoard/WandB
-            self.log(f"val_class_jaccard/{i}", score, sync_dist=True)
+        # Log each class under a named key (groups nicely in TensorBoard)
+        for i, name in enumerate(emotion_names):
+            self.log(f"val_class_jaccard/{name}", per_class_jaccard[i], sync_dist=True)
+            self.log(f"val_class_f1/{name}",      per_class_f1[i],      sync_dist=True)
 
+        # ── console table (visible in training output) ─────────────────────
+        header = f"  {'Emotion':<14} {'Jaccard':>8}  {'F1':>8}"
+        print(f"\n  [Epoch {self.current_epoch}] Validation per-emotion metrics:")
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for i, name in enumerate(emotion_names):
+            print(f"  {name:<14} {per_class_jaccard[i]:>8.4f}  {per_class_f1[i]:>8.4f}")
+        print("  " + "-" * (len(header) - 2))
+        print(f"  {'MACRO':14} {global_jaccard:>8.4f}  {global_f1:>8.4f}\n")
 
-        self.log("val_loss", avg_loss, prog_bar=True, sync_dist=True)
+        self.log("val_loss",    avg_loss,       prog_bar=True, sync_dist=True)
         self.log("val_jaccard", global_jaccard, prog_bar=True, sync_dist=True)
+        self.log("val_f1",      global_f1,      prog_bar=True, sync_dist=True)
 
         self.validation_step_outputs.clear()
 
     def test_step(self, batch, batch_nb):
-        # FIX: Added test_step so trainer.test() doesn't crash or silently reuse
+        # Added test_step so trainer.test() doesn't crash or silently reuse
         # val data. Mirrors validation_step logic.
         inputs, targets = batch
         input_ids, attention_mask = self._safe_squeeze(inputs)
 
-        logits_13 = self.forward(input_ids, attention_mask)
-        loss, targets_13 = self.calculate_loss(logits_13, targets['labels_aux'])
+        logits = self.forward(input_ids, attention_mask)
+        loss, targets_out = self.calculate_loss(logits, targets['labels_aux'])
 
         # Use custom thresholds if available
-        probs_13 = torch.sigmoid(logits_13)
-        preds_13 = (probs_13 > self.thresholds).float()
+        probs = torch.sigmoid(logits)
+        preds = (probs > self.thresholds).float()
 
         output = {
             "test_loss": loss,
-            "preds": preds_13,
-            "targets": targets_13,
+            "preds": preds,
+            "targets": targets_out,
         }
         self.test_step_outputs.append(output)
         return output
@@ -391,10 +443,97 @@ class EmotionModel(pl.LightningModule):
 
         self.test_step_outputs.clear()
 
-    def configure_optimizers(self):
-        optimizer = optim.AdamW(self.parameters(), lr=self.hparams.encoder_learning_rate)
+    # ------------------------------------------------------------------ #
+    #  Optimizer helpers (layer-wise LR + decay / no-decay split)         #
+    # ------------------------------------------------------------------ #
 
-        # FIX: Compute train steps directly from the dataset length instead of
+    _NO_DECAY_SUFFIXES = ("bias", "LayerNorm.weight")
+
+    @classmethod
+    def _param_no_weight_decay(cls, param_name: str) -> bool:
+        return any(nd in param_name for nd in cls._NO_DECAY_SUFFIXES)
+
+    def _append_lr_groups(
+        self,
+        optimizer_groups: list,
+        named_params,
+        lr: float,
+        weight_decay: float,
+    ) -> None:
+        """Split a module's parameters into decay / no-decay AdamW groups."""
+        decay_params, no_decay_params = [], []
+        for name, param in named_params:
+            if self._param_no_weight_decay(name):
+                no_decay_params.append(param)
+            else:
+                decay_params.append(param)
+        if decay_params:
+            optimizer_groups.append(
+                {"params": decay_params, "lr": lr, "weight_decay": weight_decay}
+            )
+        if no_decay_params:
+            optimizer_groups.append(
+                {"params": no_decay_params, "lr": lr, "weight_decay": 0.0}
+            )
+
+    def _encoder_layer_modules(self):
+        """Return (embeddings_module, list_of_transformer_layers) or (None, None)."""
+        if hasattr(self.model, "embeddings") and hasattr(self.model, "encoder"):
+            encoder = self.model.encoder
+            if hasattr(encoder, "layer"):
+                return self.model.embeddings, list(encoder.layer)
+        return None, None
+
+    def _build_optimizer_param_groups(self) -> list:
+        base_lr = self.hparams.encoder_learning_rate
+        weight_decay = getattr(self.hparams, "weight_decay", 0.01)
+        head_mult = getattr(self.hparams, "head_lr_multiplier", 10.0)
+        layer_decay = getattr(self.hparams, "layerwise_lr_decay", 0.9)
+
+        optimizer_grouped: list = []
+        embeddings, layers = self._encoder_layer_modules()
+
+        if layers is not None:
+            num_layers = len(layers)
+            # Embeddings sit below layer 0 — lowest LR when layer_decay < 1
+            emb_lr = base_lr * (layer_decay ** num_layers)
+            self._append_lr_groups(
+                optimizer_grouped,
+                embeddings.named_parameters(),
+                emb_lr,
+                weight_decay,
+            )
+            # Deeper transformer blocks get progressively larger LRs
+            for i, layer in enumerate(layers):
+                layer_lr = base_lr * (layer_decay ** (num_layers - 1 - i))
+                self._append_lr_groups(
+                    optimizer_grouped,
+                    layer.named_parameters(),
+                    layer_lr,
+                    weight_decay,
+                )
+        else:
+            # Non–layer-stacked encoders (fallback): single encoder LR
+            self._append_lr_groups(
+                optimizer_grouped,
+                self.model.named_parameters(),
+                base_lr,
+                weight_decay,
+            )
+
+        # Classification head — highest LR
+        self._append_lr_groups(
+            optimizer_grouped,
+            self.classifier.named_parameters(),
+            base_lr * head_mult,
+            weight_decay,
+        )
+        return optimizer_grouped
+
+    def configure_optimizers(self):
+        optimizer = optim.AdamW(self._build_optimizer_param_groups())
+
+        # Compute train steps directly from the dataset length instead of
         # instantiating a second DataLoader just to call len() on it.
         dataset = sentiment_analysis_dataset(self.hparams, train=True, val=False, test=False)
         steps_per_epoch = len(dataset) // self.hparams.batch_size
@@ -456,13 +595,31 @@ class EmotionModel(pl.LightningModule):
         parser.add_argument("--asl_clip", default=0.05, type=float)
         
         parser.add_argument("--encoder_model", default="SamLowe/roberta-base-go_emotions", type=str)
+        parser.add_argument(
+            "--freeze_epochs", default=1, type=int,
+            help="Number of epochs to keep the encoder frozen (0 = never freeze). "
+                 "During these epochs only the classifier head is trained."
+        )
         parser.add_argument("--encoder_learning_rate", default=2e-5, type=float)
+        parser.add_argument(
+            "--weight_decay", default=0.01, type=float,
+            help="AdamW weight decay for non–bias / non–LayerNorm parameters.",
+        )
+        parser.add_argument(
+            "--head_lr_multiplier", default=10.0, type=float,
+            help="Classifier head LR = encoder_learning_rate × this factor.",
+        )
+        parser.add_argument(
+            "--layerwise_lr_decay", default=0.9, type=float,
+            help="Per-layer LR multiplier (<1 raises LR toward the top of the stack). "
+                 "Set to 1.0 for a uniform encoder LR.",
+        )
         parser.add_argument("--warmup_proportion", default=0.1, type=float)
         parser.add_argument("--max_length", default=128, type=int)
         parser.add_argument("--loader_workers", default=0, type=int)
-        parser.add_argument("--train_csv", default="data/UsVsThem_train_public.csv", type=str)
-        parser.add_argument("--dev_csv", default="data/UsVsThem_valid_public.csv", type=str)
-        parser.add_argument("--test_csv", default="data/UsVsThem_test_public.csv", type=str)
+        parser.add_argument("--train_csv", default="data/combined_train_dataset.csv", type=str)
+        parser.add_argument("--dev_csv", default="data/combined_valid_dataset.csv", type=str)
+        parser.add_argument("--test_csv", default="data/combined_test_dataset.csv", type=str)
         # Focal Loss hyperparameters
         parser.add_argument("--focal_gamma", default=2.0, type=float,
                             help="Focusing parameter for FocalLoss. 0 = standard BCE.")
