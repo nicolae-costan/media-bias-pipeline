@@ -188,7 +188,15 @@ class GraphBiasLabels(pl.LightningModule):
             min_lr=hp.min_lr,
             verbose=True,
         )
-        return optimizer, scheduler
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_f1_macro",
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
     def build_model(self):
         import os
