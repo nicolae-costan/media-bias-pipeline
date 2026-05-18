@@ -617,7 +617,7 @@ class EmotionModel(pl.LightningModule):
         parser.add_argument("--warmup_proportion", default=0.1, type=float)
         parser.add_argument("--max_length", default=128, type=int)
         parser.add_argument("--loader_workers", default=0, type=int)
-        parser.add_argument("--train_csv", default="data/augmented_train_dataset.csv", type=str)
+        parser.add_argument("--train_csv", default="data/combined_train_dataset.csv", type=str)
         parser.add_argument("--dev_csv", default="data/combined_valid_dataset.csv", type=str)
         parser.add_argument("--test_csv", default="data/combined_test_dataset.csv", type=str)
         # Focal Loss hyperparameters
