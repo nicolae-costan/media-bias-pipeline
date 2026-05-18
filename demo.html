@@ -1,0 +1,1520 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Bias & Emotion Pipeline Dashboard</title>
+    <!-- Google Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #090c0a;
+            --panel-bg: rgba(18, 22, 20, 0.8);
+            --panel-border: rgba(255, 255, 255, 0.05);
+            --accent-primary: #d9a752;
+            --accent-secondary: #05c77e;
+            --accent-tertiary: #e65c5c;
+            --text-main: #f0f3f1;
+            --text-muted: #88948f;
+            --success-color: #00ff9d;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            background-color: var(--bg-color);
+            background-image:
+                radial-gradient(circle at 5% 15%, rgba(217, 167, 82, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 95% 85%, rgba(5, 199, 126, 0.07) 0%, transparent 40%),
+                radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.01) 0%, transparent 50%);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding: 2rem;
+            overflow-x: hidden;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2.5rem;
+        }
+
+        h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 2.6rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #fff 30%, var(--accent-primary) 70%, var(--accent-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.4rem;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.05rem;
+            font-weight: 300;
+        }
+
+        .subtitle span {
+            color: var(--accent-primary);
+            font-weight: 500;
+        }
+
+        /* Dashboard Grid System */
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 450px 1fr;
+            gap: 2rem;
+            align-items: start;
+        }
+
+        @media (max-width: 1200px) {
+            .workspace-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Glassmorphic Panel Layout */
+        .glass-panel {
+            background: var(--panel-bg);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid var(--panel-border);
+            border-radius: 20px;
+            padding: 1.8rem;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+            display: flex;
+            flex-direction: column;
+            gap: 1.8rem;
+        }
+
+        .sidebar-panel {
+            gap: 3.2rem !important;
+            /* Pull Custom Text Analysis and Correlated News Search further apart */
+        }
+
+        /* Collapsible Full Text Card */
+        .article-expansion {
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-top: -0.5rem;
+        }
+
+        .expansion-header {
+            padding: 0.8rem 1.2rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.01);
+            user-select: none;
+        }
+
+        .expansion-header:hover {
+            background: rgba(217, 167, 82, 0.03);
+        }
+
+        .expansion-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .expansion-chevron {
+            width: 14px;
+            height: 14px;
+            transform: rotate(0deg);
+            transition: transform 0.25s ease;
+        }
+
+        .article-expansion.expanded .expansion-chevron {
+            transform: rotate(180deg);
+        }
+
+        .expansion-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
+            padding: 0 1.2rem;
+            font-size: 0.95rem;
+            line-height: 1.65;
+            color: var(--text-muted);
+            border-top: 1px solid transparent;
+        }
+
+        .article-expansion.expanded .expansion-content {
+            max-height: 250px;
+            /* Expands smoothly when pressed */
+            overflow-y: auto;
+            padding: 1rem 1.2rem;
+            border-top-color: rgba(255, 255, 255, 0.04);
+        }
+
+        .section-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #fff;
+            border-left: 3px solid var(--accent-primary);
+            padding-left: 0.6rem;
+            margin-bottom: 0.5rem;
+        }
+
+        /* Search input group */
+        .search-group {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .search-input {
+            flex: 1;
+            background: rgba(8, 5, 20, 0.7);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 0.7rem 1rem;
+            color: #fff;
+            outline: none;
+            font-size: 0.95rem;
+        }
+
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.7) sepia(60%) saturate(800%) hue-rotate(330deg);
+            cursor: pointer;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent-secondary);
+            box-shadow: 0 0 10px rgba(0, 242, 254, 0.15);
+        }
+
+        .btn-action {
+            background: linear-gradient(135deg, var(--accent-primary) 0%, #b88636 100%);
+            border: none;
+            color: #0c0e0d;
+            padding: 0.7rem 1.2rem;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            box-shadow: 0 4px 15px rgba(217, 167, 82, 0.15);
+        }
+
+        .btn-action:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 18px rgba(217, 167, 82, 0.25);
+            background: linear-gradient(135deg, #e0b363 0%, #b88636 100%);
+        }
+
+        .btn-action:active {
+            transform: translateY(1px);
+        }
+
+        /* Custom Text Sandbox */
+        .sandbox-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100px;
+            background: rgba(8, 5, 20, 0.7);
+            border: 1px solid var(--panel-border);
+            border-radius: 10px;
+            padding: 0.8rem;
+            color: #fff;
+            font-size: 0.95rem;
+            resize: none;
+            outline: none;
+        }
+
+        textarea:focus {
+            border-color: var(--accent-secondary);
+        }
+
+        /* Top 10 List Card Items */
+        .list-container {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            max-height: 480px;
+            overflow-y: auto;
+            padding-right: 0.4rem;
+        }
+
+        /* Custom scrollbar styling */
+        .list-container::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .list-container::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.01);
+        }
+
+        .list-container::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        .news-list-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 12px;
+            padding: 0.9rem;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .news-list-item:hover {
+            background: rgba(138, 43, 226, 0.05);
+            border-color: rgba(138, 43, 226, 0.25);
+            transform: translateX(3px);
+        }
+
+        .news-list-item.selected {
+            background: rgba(138, 43, 226, 0.12);
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 15px rgba(138, 43, 226, 0.2);
+        }
+
+        .item-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .item-title {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: #fff;
+            line-height: 1.3;
+        }
+
+        .item-correlation {
+            font-size: 0.75rem;
+            color: var(--accent-secondary);
+            font-weight: 600;
+        }
+
+        /* Active Workspace Statistics Panel */
+        .workspace-panel {
+            min-height: 700px;
+            background: var(--panel-bg);
+            border: 1px solid var(--panel-border);
+            border-radius: 20px;
+            padding: 2.2rem;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+            display: flex;
+            flex-direction: column;
+            gap: 2.2rem;
+        }
+
+        .workspace-header {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            padding-bottom: 1rem;
+        }
+
+        .workspace-title-lbl {
+            font-size: 0.8rem;
+            color: var(--accent-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            font-weight: 600;
+        }
+
+        .workspace-active-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.45rem;
+            font-weight: 600;
+            color: #fff;
+            line-height: 1.35;
+        }
+
+        /* Metrics layout */
+        .metrics-row {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1.5rem;
+        }
+
+        .metric-card {
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 15px;
+            padding: 1.2rem;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+        }
+
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+        }
+
+        .metric-card.bias::before {
+            background: linear-gradient(90deg, var(--accent-secondary), var(--accent-primary));
+        }
+
+        .metric-card.gnn::before {
+            background: var(--success-color);
+        }
+
+        .metric-lbl {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.4rem;
+        }
+
+        .metric-val {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #fff;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .metric-badge {
+            display: inline-block;
+            padding: 0.2rem 0.8rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-top: 0.4rem;
+        }
+
+        .badge-biased {
+            background: rgba(254, 9, 121, 0.15);
+            color: var(--accent-tertiary);
+            border: 1px solid rgba(254, 9, 121, 0.3);
+        }
+
+        .badge-unbiased {
+            background: rgba(0, 255, 135, 0.12);
+            color: var(--success-color);
+            border: 1px solid rgba(0, 255, 135, 0.25);
+        }
+
+        /* 7 Emotions & Chart section */
+        .workspace-body-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 2.2rem;
+        }
+
+        @media (max-width: 992px) {
+            .workspace-body-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .chart-box {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--panel-border);
+            border-radius: 15px;
+            padding: 1.2rem;
+            height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Token Ablation */
+        .ablation-field {
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--panel-border);
+            border-radius: 15px;
+            padding: 1.2rem;
+            line-height: 1.95;
+            font-size: 1.1rem;
+        }
+
+        .token-badge {
+            display: inline-block;
+            padding: 0 0.3rem;
+            border-radius: 4px;
+            margin: 0 0.1rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .token-badge.ablatable {
+            background: rgba(255, 255, 255, 0.04);
+            border-bottom-style: dashed;
+            border-bottom-color: rgba(255, 255, 255, 0.25);
+        }
+
+        .token-badge.influence-high {
+            background: rgba(254, 9, 121, 0.14);
+            border-bottom-color: var(--accent-tertiary);
+            border-bottom-style: solid;
+        }
+
+        .token-badge.influence-med {
+            background: rgba(138, 43, 226, 0.14);
+            border-bottom-color: var(--accent-primary);
+            border-bottom-style: solid;
+        }
+
+        .token-badge.influence-high:hover {
+            background: rgba(254, 9, 121, 0.25);
+            box-shadow: 0 0 10px rgba(254, 9, 121, 0.25);
+        }
+
+        .token-badge.influence-med:hover {
+            background: rgba(138, 43, 226, 0.25);
+            box-shadow: 0 0 10px rgba(138, 43, 226, 0.25);
+        }
+
+        /* Ablation details widget */
+        .ablation-details {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 15px;
+            padding: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.6rem;
+        }
+
+        .ablation-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .ablation-word {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 700;
+            font-size: 1.15rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .ablation-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.45;
+        }
+
+        .ablation-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.8rem;
+            margin-top: 0.4rem;
+        }
+
+        .ablation-stat-item {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 0.6rem;
+            text-align: center;
+        }
+
+        .stat-val {
+            font-weight: 700;
+            font-size: 1rem;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .stat-val.neg {
+            color: var(--success-color);
+        }
+
+        .stat-lbl {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            margin-top: 0.15rem;
+        }
+
+        /* Loading indicator overlay */
+        .loader-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(7, 5, 16, 0.85);
+            backdrop-filter: blur(10px);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1.2rem;
+            border-radius: 20px;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(138, 43, 226, 0.15);
+            border-top: 3px solid var(--accent-secondary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>Media Bias & Emotion Pipeline Dashboard</h1>
+            <p class="subtitle">Unified Real-Time Analysis with <span>pgvector</span> and <span>Graph Attention
+                    Networks</span></p>
+        </header>
+
+        <!-- Workspace Grid Layout -->
+        <div class="workspace-grid">
+
+            <!-- Left Side: Controls & Search List -->
+            <div class="glass-panel sidebar-panel">
+
+                <!-- Section 1: Custom Sandbox Input -->
+                <div>
+                    <h3 class="section-title">Custom Text Analysis</h3>
+                    <div class="sandbox-group">
+                        <textarea id="sandbox-textarea"
+                            placeholder="Paste custom news or media text to run through the neural network pipeline...">The governor's complete tyranny and absolute propaganda disgust and anger me!</textarea>
+                        <button class="btn-action" id="btn-analyze-sandbox">
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                            </svg>
+                            <span>Analyze Sandbox Text</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Section 2: Semantic search and list -->
+                <div>
+                    <h3 class="section-title">Correlated News Search</h3>
+                    <div style="display: flex; flex-direction: column; gap: 0.8rem;">
+                        <div class="search-group">
+                            <input type="text" class="search-input" id="search-query"
+                                placeholder="Enter keyword (e.g. protest, tyranny, border)..." value="protest">
+                            <button class="btn-action" id="btn-search">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <circle cx="11" cy="11" r="8"></circle>
+                                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                                </svg>
+                                <span>Search</span>
+                            </button>
+                        </div>
+
+                        <!-- Date range parameters for NewsAPI -->
+                        <div class="search-range-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; margin-bottom: 0.2rem;">
+                            <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">From Date (NewsAPI)</label>
+                                <input type="date" class="search-input" id="search-date-from" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" value="2026-05-01">
+                            </div>
+                            <div style="display: flex; flex-direction: column; gap: 0.3rem;">
+                                <label style="font-size: 0.7rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">To Date (NewsAPI)</label>
+                                <input type="date" class="search-input" id="search-date-to" style="padding: 0.5rem 0.8rem; font-size: 0.85rem;" value="2026-05-18">
+                            </div>
+                        </div>
+
+                        <!-- Top 10 correlated news result list -->
+                        <div class="list-container" id="news-results-list">
+                            <!-- Items will be dynamically populated by Javascript -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Side: The Single, Unified Statistics Panel -->
+            <div class="workspace-panel" style="position: relative;">
+
+                <!-- Loading overlay -->
+                <div class="loader-overlay hidden" id="panel-loader">
+                    <div class="spinner"></div>
+                    <div style="font-family: 'Space Grotesk', sans-serif; font-size: 1.15rem; font-weight: 500;"
+                        id="loader-message">Processing Embeddings...</div>
+                </div>
+
+                <!-- Empty Initial State -->
+                <div id="panel-empty-state"
+                    style="margin: auto; text-align: center; max-width: 420px; display: flex; flex-direction: column; align-items: center; gap: 1.2rem;">
+                    <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)"
+                        stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="9" y1="3" x2="9" y2="21"></line>
+                    </svg>
+                    <h3 style="font-family: 'Space Grotesk', sans-serif;">Workspace Idle</h3>
+                    <p style="color: var(--text-muted); font-size: 0.95rem; font-weight: 300; line-height: 1.5;">Select
+                        an article from the left list, or click "Analyze Sandbox Text" to populate this unified
+                        workspace with complete pipeline predictions.</p>
+                </div>
+
+                <!-- Main Analysis Workspace (hidden until loaded) -->
+                <div id="panel-main-content" class="hidden"
+                    style="display: flex; flex-direction: column; gap: 2.2rem; animation: fadeIn 0.4s ease;">
+
+                    <!-- Workspace Header (Metadata) -->
+                    <div class="workspace-header">
+                        <div class="workspace-title-lbl" id="ws-meta-outlet">Breitbart News Network • topic: election
+                        </div>
+                        <h2 class="workspace-active-title" id="ws-active-title">Citizens protest against corrupt and
+                            manipulated electoral regulations.</h2>
+                    </div>
+
+
+
+                    <!-- Metrics Layer -->
+                    <div class="metrics-row">
+                        <!-- Bias Model Card -->
+                        <div class="metric-card bias">
+                            <div class="metric-lbl">Bias Model</div>
+                            <div class="metric-val" id="metric-bias-score">91.6%</div>
+                            <div class="metric-badge badge-biased" id="metric-bias-label">BIASED</div>
+                        </div>
+
+                        <!-- GNN Consensus Prediction Card -->
+                        <div class="metric-card gnn">
+                            <div class="metric-lbl">GNN Graph Consensus</div>
+                            <div class="metric-val" id="metric-gnn-score">94.8%</div>
+                            <div class="metric-badge badge-biased" id="metric-gnn-label">BIASED</div>
+                        </div>
+                    </div>
+
+                    <!-- Layout: Radar Chart & Token Ablation -->
+                    <div class="workspace-body-grid">
+
+                        <!-- Col 1: 7-Class Emotion Radar Chart -->
+                        <div>
+                            <h3
+                                style="font-family: 'Space Grotesk', sans-serif; margin-bottom: 1rem; font-size: 1.1rem; color: #fff;">
+                                7-Class Emotion Classifier</h3>
+                            <div class="chart-box">
+                                <canvas id="radarChartCanvas"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Col 2: Ablation Interpretability Sandbox -->
+                        <div style="display: flex; flex-direction: column; gap: 1rem;">
+                            <h3 style="font-family: 'Space Grotesk', sans-serif; font-size: 1.1rem; color: #fff;">Token
+                                Ablation (Aesthetics & Influence)</h3>
+
+                            <!-- Interactive highlighted text field -->
+                            <div class="ablation-field" id="ws-ablation-text">
+                                <!-- Populated dynamically by tokens -->
+                            </div>
+
+                            <!-- Ablated details card -->
+                            <div class="ablation-details" id="ws-ablation-details">
+                                <div class="ablation-header">
+                                    <div class="ablation-word" id="ws-ablation-word">protest</div>
+                                    <div style="font-size: 0.75rem; color: var(--text-muted);">Ablation Influence Card
+                                    </div>
+                                </div>
+                                <p class="ablation-desc" id="ws-ablation-desc">Select an ablatable token to see details.
+                                </p>
+                                <div class="ablation-stats">
+                                    <div class="ablation-stat-item">
+                                        <div class="stat-val neg" id="ws-stat-anger">-0.45</div>
+                                        <div class="stat-lbl">Anger Drop</div>
+                                    </div>
+                                    <div class="ablation-stat-item">
+                                        <div class="stat-val neg" id="ws-stat-disgust">-0.32</div>
+                                        <div class="stat-lbl">Disgust Drop</div>
+                                    </div>
+                                    <div class="ablation-stat-item">
+                                        <div class="stat-val neg" id="ws-stat-bias">-0.68</div>
+                                        <div class="stat-lbl">Bias Drop</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Collapsible Full Text Card -->
+                    <div class="article-expansion" id="ws-article-expansion" style="margin-top: 1.5rem;">
+                        <div class="expansion-header" id="ws-expansion-header">
+                            <div class="expansion-title">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M12 5v14M5 12h14" />
+                                </svg>
+                                <span>Read Full Article Text</span>
+                            </div>
+                            <svg class="expansion-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                                stroke="var(--text-muted)" stroke-width="2.5" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                        </div>
+                        <div class="expansion-content" id="ws-full-text">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Data & Interactive Logic Script -->
+    <script>
+        // DOM Elements
+        const btnAnalyzeSandbox = document.getElementById('btn-analyze-sandbox');
+        const btnSearch = document.getElementById('btn-search');
+        const searchQuery = document.getElementById('search-query');
+        const newsResultsList = document.getElementById('news-results-list');
+
+        const panelEmptyState = document.getElementById('panel-empty-state');
+        const panelMainContent = document.getElementById('panel-main-content');
+        const panelLoader = document.getElementById('panel-loader');
+        const loaderMessage = document.getElementById('loader-message');
+
+        const sandboxTextarea = document.getElementById('sandbox-textarea');
+
+        // Dynamic chart reference
+        let radarChartInstance = null;
+
+        // Unified Workspace update variables
+        const wsMetaOutlet = document.getElementById('ws-meta-outlet');
+        const wsActiveTitle = document.getElementById('ws-active-title');
+        const metricBiasScore = document.getElementById('metric-bias-score');
+        const metricBiasLabel = document.getElementById('metric-bias-label');
+        const metricGnnScore = document.getElementById('metric-gnn-score');
+        const metricGnnLabel = document.getElementById('metric-gnn-label');
+        const wsAblationText = document.getElementById('ws-ablation-text');
+
+        const wsAblationWord = document.getElementById('ws-ablation-word');
+        const wsAblationDesc = document.getElementById('ws-ablation-desc');
+        const wsStatAnger = document.getElementById('ws-stat-anger');
+        const wsStatDisgust = document.getElementById('ws-stat-disgust');
+        const wsStatBias = document.getElementById('ws-stat-bias');
+
+        // Collapsible variables
+        const wsArticleExpansion = document.getElementById('ws-article-expansion');
+        const wsExpansionHeader = document.getElementById('ws-expansion-header');
+        const wsFullText = document.getElementById('ws-full-text');
+
+        // COMPLETE MOCK DATA FOR ARTICLES (Fully representative of the search queries)
+        const mockArticles = [
+            {
+                id: 1,
+                title: "Citizens protest against corrupt and manipulated electoral regulations.",
+                body: "Massive public protests condemn corporate media propaganda and bias.",
+                outlet: "Breitbart News Network",
+                topic: "election",
+                correlation: 98.4,
+                biasScore: 94.8,
+                biasLabel: "BIASED",
+                gnnScore: 96.2,
+                gnnLabel: "BIASED",
+                date: "2026-05-18",
+                emotions: [0.88, 0.74, 0.35, 0.05, 0.12, 0.32, 0.08], // anger, disgust, fear, joy, optimism, sadness, neutral
+                keywords: ["protest", "election", "regulations"],
+                ablation: {
+                    "protests": { desc: "Core activist action token. Masking this word significantly drops the anger signature and neutralizes the GNN structural bias prediction.", stats: { anger: "-0.54", disgust: "-0.22", bias: "-0.65" } },
+                    "propaganda": { desc: "High-value political trigger token. Masking it reduces the calculated bias probability metrics on the GNN attention model.", stats: { anger: "-0.38", disgust: "-0.45", bias: "-0.78" } },
+                    "bias": { desc: "Explicit meta-attribution word. Directly impacts target ideological polarity regression nodes.", stats: { anger: "-0.12", disgust: "-0.20", bias: "-0.48" } }
+                }
+            },
+            {
+                id: 2,
+                title: "Massive public protests erupt outside parliament following economic collapse.",
+                body: "Outraged workers protest severe layoffs and government hostility today.",
+                outlet: "The Guardian",
+                topic: "economy",
+                correlation: 92.1,
+                biasScore: 48.2,
+                biasLabel: "UNBIASED",
+                gnnScore: 52.4,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-15",
+                emotions: [0.72, 0.45, 0.62, 0.02, 0.05, 0.78, 0.10],
+                keywords: ["protest", "hostility", "layoffs"],
+                ablation: {
+                    "protest": { desc: "Action keyword indicating dissent. Drops anger levels.", stats: { anger: "-0.35", disgust: "-0.15", bias: "-0.12" } },
+                    "hostility": { desc: "Aggressive emotional indicator. Directly drives sadness and disgust output scores.", stats: { anger: "-0.52", disgust: "-0.38", bias: "-0.28" } }
+                }
+            },
+            {
+                id: 3,
+                title: "Local authorities enforce mandatory health restrictions and lockdowns.",
+                body: "Citizens express intense fear and disgust over ongoing quarantine restrictions.",
+                outlet: "FoxNews Network",
+                topic: "public_health",
+                correlation: 89.6,
+                biasScore: 82.4,
+                biasLabel: "BIASED",
+                gnnScore: 85.1,
+                gnnLabel: "BIASED",
+                date: "2026-05-14",
+                emotions: [0.65, 0.82, 0.88, 0.01, 0.02, 0.45, 0.08],
+                keywords: ["restrictions", "fear", "quarantine"],
+                ablation: {
+                    "restrictions": { desc: "Key trigger representing civil regulation. Masking drops bias score and fear levels.", stats: { anger: "-0.25", disgust: "-0.32", bias: "-0.58" } },
+                    "fear": { desc: "Direct emotional text attribute. Eliminating it instantly drops the fear classification output.", stats: { anger: "-0.10", disgust: "-0.05", bias: "-0.20" } },
+                    "disgust": { desc: "Explicit emotional reaction. Strongly correlates with Disgust and Sadness classes.", stats: { anger: "-0.20", disgust: "-0.78", bias: "-0.15" } }
+                }
+            },
+            {
+                id: 4,
+                title: "Congress passes border security bill amidst hostile and bitter debates.",
+                body: "Opposing parties trade insults, creating public anger and deep division.",
+                outlet: "MSNBC News",
+                topic: "border_security",
+                correlation: 86.5,
+                biasScore: 78.5,
+                biasLabel: "BIASED",
+                gnnScore: 81.2,
+                gnnLabel: "BIASED",
+                date: "2026-05-10",
+                emotions: [0.92, 0.68, 0.25, 0.01, 0.05, 0.50, 0.05],
+                keywords: ["border", "hostile", "insults"],
+                ablation: {
+                    "hostile": { desc: "Explicitly hostile terminology. Removal heavily impacts Anger and Disgust scores.", stats: { anger: "-0.62", disgust: "-0.40", bias: "-0.38" } },
+                    "insults": { desc: "Dissonance token. Masking reduces calculated bias from congressional reporting.", stats: { anger: "-0.41", disgust: "-0.45", bias: "-0.50" } }
+                }
+            },
+            {
+                id: 5,
+                title: "Local authority enforces mandatory restrictions and absolute tyranny.",
+                body: "Local residents claim these health measures are a form of political tyranny.",
+                outlet: "Breitbart News Network",
+                topic: "civil_liberties",
+                correlation: 84.1,
+                biasScore: 96.5,
+                biasLabel: "BIASED",
+                gnnScore: 98.1,
+                gnnLabel: "BIASED",
+                date: "2026-05-17",
+                emotions: [0.95, 0.78, 0.70, 0.01, 0.01, 0.35, 0.03],
+                keywords: ["tyranny", "restrictions", "political"],
+                ablation: {
+                    "tyranny": { desc: "Extremely polar, inflammatory word. Masking this word completely collapses the GNN and local Bias classifier outputs.", stats: { anger: "-0.78", disgust: "-0.42", bias: "-0.88" } },
+                    "restrictions": { desc: "Administrative trigger term. Has moderate influence on overall structural node clustering.", stats: { anger: "-0.32", disgust: "-0.28", bias: "-0.45" } }
+                }
+            },
+            {
+                id: 6,
+                title: "Voters express immense joy and optimism after official election results.",
+                body: "A wave of collective joy and optimism sweeps the community post election.",
+                outlet: "CNN International",
+                topic: "election",
+                correlation: 78.9,
+                biasScore: 32.4,
+                biasLabel: "UNBIASED",
+                gnnScore: 38.6,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-18",
+                emotions: [0.02, 0.01, 0.01, 0.94, 0.88, 0.05, 0.15],
+                keywords: ["joy", "optimism", "election"],
+                ablation: {
+                    "joy": { desc: "Strong positive semantic token. Primary driver for the Joy classifier output.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.05" } },
+                    "optimism": { desc: "Future-positive anchor. Removal drops optimism metrics significantly.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.02" } }
+                }
+            },
+            {
+                id: 7,
+                title: "Government releases neutral statement regarding regulatory changes.",
+                body: "Independent experts provide a neutral and objective analysis of the new policy.",
+                outlet: "Reuters",
+                topic: "policy",
+                correlation: 72.1,
+                biasScore: 12.5,
+                biasLabel: "UNBIASED",
+                gnnScore: 15.3,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-12",
+                emotions: [0.05, 0.04, 0.08, 0.10, 0.15, 0.08, 0.92],
+                keywords: ["neutral", "objective", "policy"],
+                ablation: {
+                    "neutral": { desc: "Objective modifier. Masking increases ambiguity but retains unbiased labels.", stats: { anger: "+0.02", disgust: "+0.02", bias: "+0.05" } },
+                    "objective": { desc: "Positive verification parameter. Directly drives the baseline Neutral confidence score.", stats: { anger: "+0.01", disgust: "+0.01", bias: "+0.02" } }
+                }
+            },
+            {
+                id: 8,
+                title: "Economic inflation surge creates deep sadness and public anxiety.",
+                body: "Anxiety and severe sadness spread as families struggle to afford basic goods.",
+                outlet: "MSNBC News",
+                topic: "economy",
+                correlation: 68.4,
+                biasScore: 45.1,
+                biasLabel: "UNBIASED",
+                gnnScore: 48.9,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-08",
+                emotions: [0.35, 0.28, 0.72, 0.01, 0.02, 0.91, 0.12],
+                keywords: ["sadness", "anxiety", "inflation"],
+                ablation: {
+                    "sadness": { desc: "Primary depressive descriptor. Masking this drops overall Sadness metrics significantly.", stats: { anger: "-0.15", disgust: "-0.08", bias: "-0.05" } },
+                    "anxiety": { desc: "Fear-equivalent stress token. Masking it drops the fear and sadness predictions.", stats: { anger: "-0.10", disgust: "-0.05", bias: "-0.08" } }
+                }
+            },
+            {
+                id: 9,
+                title: "Tech enterprise explains their neutral search algorithm updates.",
+                body: "The search system updates focus strictly on providing neutral and direct relevance.",
+                outlet: "BBC World",
+                topic: "technology",
+                correlation: 62.3,
+                biasScore: 15.8,
+                biasLabel: "UNBIASED",
+                gnnScore: 18.2,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-05",
+                emotions: [0.03, 0.02, 0.05, 0.12, 0.18, 0.05, 0.94],
+                keywords: ["neutral", "updates", "technology"],
+                ablation: {
+                    "neutral": { desc: "Semantic baseline token. Validates high neutral confidence metric.", stats: { anger: "+0.01", disgust: "+0.01", bias: "+0.03" } }
+                }
+            },
+            {
+                id: 10,
+                title: "Social welfare benefits expansion triggers massive joy and community hope.",
+                body: "Families express profound optimism and hope for the coming economic quarters.",
+                outlet: "The Guardian",
+                topic: "social_policy",
+                correlation: 59.8,
+                biasScore: 35.6,
+                biasLabel: "UNBIASED",
+                gnnScore: 41.2,
+                gnnLabel: "UNBIASED",
+                date: "2026-05-02",
+                emotions: [0.01, 0.01, 0.02, 0.88, 0.92, 0.04, 0.18],
+                keywords: ["hope", "optimism", "welfare"],
+                ablation: {
+                    "hope": { desc: "Semantic hope descriptor. Drives joy and optimism categories in the 7-class head.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.02" } },
+                    "optimism": { desc: "Direct future-positive cue. Removal drops community optimism outputs.", stats: { anger: "+0.00", disgust: "+0.00", bias: "-0.03" } }
+                }
+            }
+        ];
+
+        // Search trigger
+        btnSearch.addEventListener('click', runSearch);
+        searchQuery.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') runSearch();
+        });
+
+        /*
+          ======================================================================
+          DEVELOPER NOTE (LIVE API INTEGRATION BY DACIAN / SIBLING DEVELOPER):
+          To replace this local mock list generator with the real live API search
+          using your FastAPI backend, copy the following boilerplate:
+
+          async function runLiveSearch() {
+              const query = searchQuery.value.trim();
+              const dateFrom = document.getElementById('search-date-from').value;
+              const dateTo = document.getElementById('search-date-to').value;
+              if (!query) return;
+
+              newsResultsList.innerHTML = '';
+              panelEmptyState.classList.add('hidden');
+              panelMainContent.classList.add('hidden');
+              panelLoader.classList.remove('hidden');
+              loaderMessage.textContent = "Querying Live NewsAPI & Neural Models...";
+
+              try {
+                  const response = await fetch("http://localhost:8000/api/v1/news/analyze", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                          keywords: query,
+                          from_date: dateFrom || null,
+                          to_date: dateTo || null,
+                          include_biased_spans: true,
+                          max_spans: 5
+                      })
+                  });
+                  if (!response.ok) throw new Error("Backend server returned HTTP error");
+                  const data = await response.json();
+                  
+                  panelLoader.classList.add('hidden');
+                  if (data.articles.length === 0) {
+                      newsResultsList.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:1rem;">No live news found.</div>';
+                      return;
+                  }
+
+                  // Render live articles
+                  data.articles.forEach((item, index) => {
+                      const el = document.createElement('div');
+                      el.className = 'news-list-item';
+                      if (index === 0) {
+                          el.className += ' selected';
+                          loadLiveArticle(item);
+                      }
+                      el.innerHTML = `
+                          <div class="item-meta">
+                              <span>${item.article.source_name || "News Outlet"}</span>
+                              <span class="item-correlation" style="color: var(--accent-primary); font-weight:600;">
+                                  ${Math.round(item.analysis.bias.prob_biased * 100)}% Bias
+                              </span>
+                          </div>
+                          <div class="item-title">${item.article.title}</div>
+                      `;
+                      el.addEventListener('click', () => {
+                          document.querySelectorAll('.news-list-item').forEach(x => x.classList.remove('selected'));
+                          el.classList.add('selected');
+                          loadLiveArticle(item);
+                      });
+                      newsResultsList.appendChild(el);
+                  });
+              } catch (err) {
+                  console.error("Live integration error:", err);
+                  panelLoader.classList.add('hidden');
+                  newsResultsList.innerHTML = '<div style="text-align:center; color:var(--accent-tertiary); padding:1rem; font-size:0.85rem;">API Connection Failed. Please boot uvicorn.</div>';
+              }
+          }
+
+          function loadLiveArticle(item) {
+              panelMainContent.classList.remove('hidden');
+              
+              // 1. Title & Outlet
+              wsMetaOutlet.textContent = `${item.article.source_name || "News Outlet"} • Published: ${new Date(item.article.published_at).toLocaleDateString()}`;
+              wsActiveTitle.textContent = item.article.title;
+
+              // 2. Metrics Cards (Live Models)
+              metricBiasScore.textContent = `${Math.round(item.analysis.bias.prob_biased * 100)}%`;
+              metricBiasLabel.textContent = item.analysis.bias.label.toUpperCase();
+              metricBiasLabel.className = item.analysis.bias.label === "Biased" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
+
+              metricGnnScore.textContent = "N/A";
+              metricGnnLabel.textContent = "DYNAMIC NEWS";
+              metricGnnLabel.className = "metric-badge badge-unbiased";
+
+              // 3. Radar Chart (Map dict keys in dataloader order)
+              const order = ['anger', 'disgust', 'fear', 'joy', 'optimism', 'sadness', 'neutral'];
+              const emotionsArray = order.map(k => item.analysis.emotions[k] || 0.0);
+              renderRadarChart(emotionsArray);
+
+              // 4. Render interactive ablatable sentences (using real biased_spans)
+              renderLiveAblationText(item.article.content || item.article.description || "", item.analysis.biased_spans);
+
+              // 5. Expandable full text accordion
+              wsArticleExpansion.classList.remove('expanded');
+              wsFullText.textContent = item.article.content || item.article.description || "No article content body available.";
+          }
+
+          function renderLiveAblationText(text, spans) {
+              wsAblationText.innerHTML = '';
+              
+              // If no spans, just render normal text
+              if (!spans || spans.length === 0) {
+                  wsAblationText.textContent = text;
+                  wsAblationWord.textContent = "none";
+                  wsAblationDesc.textContent = "No highly biased sentence patterns detected in this news article.";
+                  return;
+              }
+
+              // Highlight matching sentence spans
+              let lastIdx = 0;
+              spans.forEach((span, i) => {
+                  if (span.start > lastIdx) {
+                      const normalSpan = document.createElement('span');
+                      normalSpan.textContent = text.slice(lastIdx, span.start);
+                      wsAblationText.appendChild(normalSpan);
+                  }
+
+                  const highlightedSpan = document.createElement('span');
+                  highlightedSpan.textContent = text.slice(span.start, span.end);
+                  highlightedSpan.className = 'token-badge ablatable influence-high';
+                  highlightedSpan.style.cursor = 'pointer';
+                  highlightedSpan.style.borderBottom = '2px solid var(--accent-tertiary)';
+                  highlightedSpan.addEventListener('click', () => {
+                      wsAblationWord.textContent = `Sentence #${i + 1}`;
+                      wsAblationDesc.textContent = `"${span.text}"`;
+                      wsStatAnger.textContent = "N/A";
+                      wsStatDisgust.textContent = "N/A";
+                      wsStatBias.textContent = `-${span.bias_delta.toFixed(2)}`;
+                  });
+                  wsAblationText.appendChild(highlightedSpan);
+                  lastIdx = span.end;
+              });
+
+              if (lastIdx < text.length) {
+                  const normalSpan = document.createElement('span');
+                  normalSpan.textContent = text.slice(lastIdx);
+                  wsAblationText.appendChild(normalSpan);
+              }
+              
+              // Trigger first highlight as active card
+              wsAblationWord.textContent = `Sentence #1`;
+              wsAblationDesc.textContent = `"${spans[0].text}"`;
+              wsStatAnger.textContent = "N/A";
+              wsStatDisgust.textContent = "N/A";
+              wsStatBias.textContent = `-${spans[0].bias_delta.toFixed(2)}`;
+          }
+          ======================================================================
+        */
+
+        // Add auto-triggers to range dates
+        document.getElementById('search-date-from').addEventListener('change', runSearch);
+        document.getElementById('search-date-to').addEventListener('change', runSearch);
+
+        function runSearch() {
+            const query = searchQuery.value.toLowerCase().trim();
+            const dateFrom = document.getElementById('search-date-from').value;
+            const dateTo = document.getElementById('search-date-to').value;
+            newsResultsList.innerHTML = '';
+
+            // Filter articles by checking matches AND date range limits!
+            const filtered = mockArticles.filter(art => {
+                // Range validity checks
+                if (dateFrom && art.date < dateFrom) return false;
+                if (dateTo && art.date > dateTo) return false;
+
+                if (!query) return true;
+                return art.keywords.some(k => k.includes(query)) ||
+                    art.title.toLowerCase().includes(query) ||
+                    art.body.toLowerCase().includes(query);
+            });
+
+            if (filtered.length === 0) {
+                newsResultsList.innerHTML = '<div style="text-align:center; color:var(--text-muted); padding:1rem; font-size:0.9rem;">No correlated news found.</div>';
+                return;
+            }
+
+            filtered.forEach((art, index) => {
+                const item = document.createElement('div');
+                item.className = 'news-list-item';
+                if (index === 0) {
+                    item.className += ' selected';
+                    loadArticleIntoWorkspace(art);
+                }
+
+                item.innerHTML = `
+                    <div class="item-meta">
+                        <span>${art.outlet}</span>
+                        <span class="item-correlation">${art.correlation}% Correlation</span>
+                    </div>
+                    <div class="item-title">${art.title}</div>
+                `;
+
+                item.addEventListener('click', () => {
+                    // Update selection
+                    document.querySelectorAll('.news-list-item').forEach(el => el.classList.remove('selected'));
+                    item.classList.add('selected');
+                    loadArticleIntoWorkspace(art);
+                });
+
+                newsResultsList.appendChild(item);
+            });
+        }
+
+        // Custom Sandbox analyzer
+        btnAnalyzeSandbox.addEventListener('click', async () => {
+            const text = sandboxTextarea.value.trim();
+            if (!text) return;
+
+            /*
+              ======================================================================
+              DEVELOPER NOTE (LIVE API INTEGRATION BY DACIAN / SIBLING DEVELOPER):
+              To replace this mock sandbox with the live analyze API request,
+              you can drop in this fetch boilerplate:
+
+              panelEmptyState.classList.add('hidden');
+              panelMainContent.classList.add('hidden');
+              panelLoader.classList.remove('hidden');
+              loaderMessage.textContent = "Running live models on custom input...";
+
+              try {
+                  const response = await fetch("http://localhost:8000/api/v1/analyze", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                          text: text,
+                          include_biased_spans: true,
+                          max_spans: 5
+                      })
+                  });
+                  const data = await response.json();
+                  panelLoader.classList.add('hidden');
+                  
+                  // Construct a unified live object and pass it to loadLiveArticle()!
+                  const mockArticleFormat = {
+                      article: {
+                          title: "Custom Sandbox Input",
+                          source_name: "Sandbox Analysis",
+                          published_at: new Date().toISOString(),
+                          content: text,
+                          description: ""
+                      },
+                      analysis: data
+                  };
+                  loadLiveArticle(mockArticleFormat);
+              } catch (err) {
+                  console.error(err);
+                  panelLoader.classList.add('hidden');
+                  alert("Failed to connect to API on http://localhost:8000. Is uvicorn running?");
+              }
+              return;
+              ======================================================================
+            */
+
+            // Show loader overlay with pipeline simulations
+            panelEmptyState.classList.add('hidden');
+            panelMainContent.classList.add('hidden');
+            panelLoader.classList.remove('hidden');
+
+            loaderMessage.textContent = "Processing Embeddings (768-dim)...";
+            await sleep(800);
+
+            loaderMessage.textContent = "Running 7-Class Emotion Classifier...";
+            await sleep(600);
+
+            loaderMessage.textContent = "Querying pgvector HNSW Index...";
+            await sleep(600);
+
+            loaderMessage.textContent = "Aggregating Graph Attention GNN...";
+            await sleep(600);
+
+            panelLoader.classList.add('hidden');
+            panelMainContent.classList.remove('hidden');
+
+            // Generate custom results for sandbox text
+            // Determine custom values dynamically by scanning for key terms
+            let isBiased = text.toLowerCase().includes('tyranny') || text.toLowerCase().includes('propaganda') || text.toLowerCase().includes('corrupt');
+
+            let customArticle = {
+                title: "Custom Sandbox Content",
+                body: text,
+                outlet: "Sandbox Text Area",
+                topic: "user_sandbox",
+                biasScore: isBiased ? 92.5 : 24.1,
+                biasLabel: isBiased ? "BIASED" : "UNBIASED",
+                gnnScore: isBiased ? 94.6 : 28.5,
+                gnnLabel: isBiased ? "BIASED" : "UNBIASED",
+                // anger, disgust, fear, joy, optimism, sadness, neutral
+                emotions: isBiased ? [0.90, 0.82, 0.40, 0.02, 0.05, 0.20, 0.10] : [0.05, 0.05, 0.10, 0.40, 0.35, 0.10, 0.85],
+                ablation: {
+                    "tyranny": { desc: "Core absolute bias trigger. Drops GNN correlation to baseline metrics.", stats: { anger: "-0.75", disgust: "-0.35", bias: "-0.82" } },
+                    "propaganda": { desc: "Direct manipulative intent badge. Masking it neutralizes target model thresholds.", stats: { anger: "-0.40", disgust: "-0.48", bias: "-0.75" } },
+                    "disgust": { desc: "Direct expressive modifier. Directly impacts multi-label disgust outputs.", stats: { anger: "-0.15", disgust: "-0.80", bias: "-0.22" } },
+                    "anger": { desc: "Anger-anchored modifier. Direct impact on primary anger output scores.", stats: { anger: "-0.85", disgust: "-0.05", bias: "-0.12" } }
+                }
+            };
+
+            loadArticleIntoWorkspace(customArticle);
+        });
+
+        // Load targeted data directly into the Single Unified Workspace Panel!
+        async function loadArticleIntoWorkspace(art) {
+            panelEmptyState.classList.add('hidden');
+            panelMainContent.classList.add('hidden');
+            panelLoader.classList.remove('hidden');
+
+            loaderMessage.textContent = "Updating Workspace Statistics...";
+            await sleep(400);
+
+            panelLoader.classList.add('hidden');
+            panelMainContent.classList.remove('hidden');
+
+            // 1. Text headers
+            wsMetaOutlet.textContent = `${art.outlet} • topic: ${art.topic}`;
+            wsActiveTitle.textContent = art.title;
+
+            // 2. Metrics cards
+            metricBiasScore.textContent = `${art.biasScore}%`;
+            metricBiasLabel.textContent = art.biasLabel;
+            metricBiasLabel.className = art.biasLabel === "BIASED" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
+
+            metricGnnScore.textContent = `${art.gnnScore}%`;
+            metricGnnLabel.textContent = art.gnnLabel;
+            metricGnnLabel.className = art.gnnLabel === "BIASED" ? "metric-badge badge-biased" : "metric-badge badge-unbiased";
+
+            // 3. Render 7-Class Emotion Radar Chart!
+            renderRadarChart(art.emotions);
+
+            // 4. Render interactive ablatable text
+            renderAblatableText(art);
+
+            // 5. Populate and Collapse the Full Text expansion container
+            wsArticleExpansion.classList.remove('expanded');
+            wsFullText.textContent = art.body;
+        }
+
+        function renderRadarChart(emotionsData) {
+            if (radarChartInstance) {
+                radarChartInstance.destroy();
+            }
+
+            const ctx = document.getElementById('radarChartCanvas').getContext('2d');
+            radarChartInstance = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    // EXACTLY 7 EMOTION HEAD LABELS AS DEFINED IN dataloader.py
+                    labels: ['Anger', 'Disgust', 'Fear', 'Joy', 'Optimism', 'Sadness', 'Neutral'],
+                    datasets: [{
+                        label: 'Core Activation Probabilities',
+                        data: emotionsData,
+                        backgroundColor: 'rgba(217, 167, 82, 0.15)',
+                        borderColor: '#d9a752',
+                        pointBackgroundColor: '#05c77e',
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: '#d9a752',
+                        borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        r: {
+                            angleLines: { color: 'rgba(255,255,255,0.08)' },
+                            grid: { color: 'rgba(255,255,255,0.08)' },
+                            pointLabels: { color: '#9c96ad', font: { size: 10, family: 'Outfit', weight: '500' } },
+                            ticks: { display: false },
+                            min: 0,
+                            max: 1
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        function renderAblatableText(art) {
+            wsAblationText.innerHTML = '';
+            const words = art.body.split(/\s+/);
+
+            words.forEach(word => {
+                const cleanWord = word.toLowerCase().replace(/[^a-z]/g, '');
+                const span = document.createElement('span');
+                span.textContent = word + ' ';
+                span.className = 'token-badge';
+
+                if (art.ablation && art.ablation[cleanWord]) {
+                    const info = art.ablation[cleanWord];
+
+                    // Style by priority
+                    if (cleanWord === 'tyranny' || cleanWord === 'propaganda' || cleanWord === 'hostile') {
+                        span.className += ' ablatable influence-high';
+                    } else {
+                        span.className += ' ablatable influence-med';
+                    }
+
+                    span.addEventListener('click', () => {
+                        selectTokenAblation(cleanWord, info);
+                    });
+                }
+
+                wsAblationText.appendChild(span);
+            });
+
+            // Auto-select first ablatable token if exists
+            if (art.ablation && Object.keys(art.ablation).length > 0) {
+                const firstKey = Object.keys(art.ablation)[0];
+                selectTokenAblation(firstKey, art.ablation[firstKey]);
+            } else {
+                wsAblationWord.textContent = "none";
+                wsAblationDesc.textContent = "No highly influential emotion or bias driver tokens identified in this text body.";
+                wsStatAnger.textContent = "0.00";
+                wsStatDisgust.textContent = "0.00";
+                wsStatBias.textContent = "0.00";
+            }
+        }
+
+        function selectTokenAblation(word, info) {
+            wsAblationWord.textContent = word;
+            wsAblationDesc.textContent = info.desc;
+            wsStatAnger.textContent = info.stats.anger;
+            wsStatDisgust.textContent = info.stats.disgust;
+            wsStatBias.textContent = info.stats.bias;
+
+            // Dynamic color adjustment
+            const card = document.getElementById('ws-ablation-details');
+            if (word === 'tyranny' || word === 'propaganda' || word === 'hostile') {
+                card.style.background = 'rgba(230, 92, 92, 0.05)';
+                card.style.border = '1px dashed rgba(230, 92, 92, 0.3)';
+                wsAblationWord.style.color = 'var(--accent-tertiary)';
+            } else {
+                card.style.background = 'rgba(217, 167, 82, 0.05)';
+                card.style.border = '1px dashed rgba(217, 167, 82, 0.3)';
+                wsAblationWord.style.color = 'var(--accent-primary)';
+            }
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // Collapsible click trigger
+        wsExpansionHeader.addEventListener('click', () => {
+            wsArticleExpansion.classList.toggle('expanded');
+        });
+
+        // Initialize Search on startup to populate list
+        runSearch();
+    </script>
+</body>
+
+</html>
