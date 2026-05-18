@@ -15,6 +15,11 @@ ENV/
 tb_logs/
 SentimentClassification/tb_logs/
 
+# Generated graph/model artifacts
+checkpoints/
+graph.pt
+*.pt
+
 # IDEs
 .idea/
 .vscode/
