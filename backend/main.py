@@ -93,12 +93,14 @@ async def news_analyze(request: NewsAnalyzeRequest) -> NewsAnalyzeResponse:
         if (text := article_analysis_text(article).strip())
     ]
     articles = [article for article, _ in article_text_pairs]
-    texts = [text for _, text in article_text_pairs]
-    analyses = model_service.analyze_many(
-        texts,
-        include_biased_spans=request.include_biased_spans,
-        max_spans=request.max_spans,
-    )
+    analyses = [
+        model_service.analyze_long_text(
+            text,
+            include_biased_spans=request.include_biased_spans,
+            max_spans=request.max_spans,
+        )
+        for _, text in article_text_pairs
+    ]
     return NewsAnalyzeResponse(
         total_results=news.total_results,
         articles=[
