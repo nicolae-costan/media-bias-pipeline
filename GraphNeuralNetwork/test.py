@@ -5,12 +5,12 @@ Usage:
     python test.py --checkpoint checkpoints/best-epoch=042-val_f1_macro=0.7812.ckpt
     python test.py --checkpoint checkpoints/last.ckpt --graph_path graph.pt
     python test.py --checkpoint checkpoints/last.ckpt --split all      # train+val+test
-    python test.py --checkpoint checkpoints/last.ckpt --leakage_check  # isolation test
+    python test.py --checkpoint checkpoints/last.ckpt --leakage_check  # compare full vs strict split edges
 
 Prints a full sklearn classification_report for the requested split.
---leakage_check additionally runs an isolation evaluation: all edges that
-touch training nodes are removed before inference, revealing whether test
-accuracy was inflated by label leakage through graph edges.
+By default, evaluation uses strict split-local edges: train nodes only pass
+messages to train nodes, validation to validation, and test to test.
+--leakage_check compares that strict score with full-graph message passing.
 """
 
 import argparse
@@ -77,9 +77,8 @@ def get_args():
                         choices=["train", "val", "test", "all"],
                         help="Which mask(s) to evaluate on")
     parser.add_argument("--leakage_check", action="store_true",
-                        help="Also run the isolation test: strips all edges "
-                             "touching training nodes and re-evaluates on test "
-                             "split to detect label leakage through graph edges")
+                        help="Also compare strict split-local test metrics with "
+                             "full-graph message passing.")
     parser.add_argument("--accelerator", type=str, default="auto")
     parser.add_argument("--devices",     type=int, default=1)
     return parser.parse_args()
@@ -97,9 +96,8 @@ def evaluate_isolated(model, graph, device):
     Why this matters
     ----------------
     In a transductive GNN each test node is IN the graph during training.
-    If a test node has a direct edge to a training node, the GAT can aggregate
-    that neighbor's feature vector (which correlates strongly with its known
-    label) and effectively "copy" the label instead of learning from the text.
+    This helper is kept for ad-hoc diagnostics. The main evaluation path now
+    uses stricter split-local edges by default.
 
     Interpretation
     --------------
@@ -216,7 +214,7 @@ def main():
         log.info(f"  Evaluating on '{split_name}' split  ({n_nodes:,} nodes)")
         log.info(f"{'='*60}")
 
-        results = model._evaluate(graph.to(device), mask.to(device))
+        results = model._evaluate(graph.to(device), mask.to(device), use_split_edges=True)
 
         log.info(f"  Loss     : {results['loss']:.4f}")
         log.info(f"  Accuracy : {results['accuracy']:.4f}")
@@ -227,28 +225,25 @@ def main():
     log.info("Evaluation complete.")
 
     # ------------------------------------------------------------------
-    # 5. Optional leakage / isolation check
+    # 5. Optional leakage comparison
     # ------------------------------------------------------------------
     if args.leakage_check:
-        log.info("\nRunning leakage isolation check …")
-        acc_full = None
-        if "test" in splits_to_run:
-            results_test = model._evaluate(graph.to(device), graph.test_mask.to(device))
-            acc_full = results_test["accuracy"]
-            f1_full  = results_test["f1_macro"]
+        log.info("\nRunning full-graph vs strict split-edge comparison on test split …")
+        graph_dev = graph.to(device)
+        test_mask = graph_dev.test_mask
 
-        acc_iso, f1_iso = evaluate_isolated(model, graph, device)
+        strict = model._evaluate(graph_dev, test_mask, use_split_edges=True)
+        full = model._evaluate(graph_dev, test_mask, use_split_edges=False)
 
-        if acc_full is not None:
-            acc_delta = acc_iso - acc_full
-            f1_delta  = f1_iso  - f1_full
-            log.info("\n--- Leakage delta (isolated − full) ---")
-            log.info(f"  Δ Accuracy : {acc_delta:+.4f}")
-            log.info(f"  Δ F1 Macro : {f1_delta:+.4f}")
-            if abs(acc_delta) < 0.03:
-                log.info("  ✅ Minimal drop — model appears to use real text features")
-            else:
-                log.info("  ⚠️  Notable drop — model may be leaking labels through edges")
+        acc_delta = strict["accuracy"] - full["accuracy"]
+        f1_delta = strict["f1_macro"] - full["f1_macro"]
+        log.info("\n--- Strict split-local − full-graph delta ---")
+        log.info(f"  Full Accuracy   : {full['accuracy']:.4f}")
+        log.info(f"  Strict Accuracy : {strict['accuracy']:.4f}")
+        log.info(f"  Δ Accuracy      : {acc_delta:+.4f}")
+        log.info(f"  Full F1 Macro   : {full['f1_macro']:.4f}")
+        log.info(f"  Strict F1 Macro : {strict['f1_macro']:.4f}")
+        log.info(f"  Δ F1 Macro      : {f1_delta:+.4f}")
 
 
 if __name__ == "__main__":
