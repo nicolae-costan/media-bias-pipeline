@@ -19,6 +19,7 @@ SentimentClassification/tb_logs/
 checkpoints/
 graph.pt
 *.pt
+data/bias_transformer/
 
 # IDEs
 .idea/
