@@ -29,6 +29,33 @@ def _clean_labeled_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=["body_norm"]).reset_index(drop=True)
 
 
+def _load_merged_bodies(path: str) -> pd.DataFrame:
+    merged = pd.read_csv(path)
+    required = {"article_id", "body"}
+    missing = required - set(merged.columns)
+    if missing:
+        raise ValueError(f"Merged article CSV missing columns: {sorted(missing)}")
+
+    # Labels from merged_clean_data.csv are intentionally ignored. The bias
+    # transformer's supervised stage uses consensus_labels_sg1_sg2.csv only.
+    merged = merged[["article_id", "body"]].copy()
+    merged["article_id"] = merged["article_id"].astype(str)
+    return merged
+
+
+def _load_consensus_labels(path: str) -> pd.DataFrame:
+    consensus = pd.read_csv(path)
+    required = {"article_id", "consensus_label", "agreement"}
+    missing = required - set(consensus.columns)
+    if missing:
+        raise ValueError(f"Consensus CSV missing columns: {sorted(missing)}")
+
+    consensus = consensus[["article_id", "consensus_label", "agreement"]].copy()
+    consensus["article_id"] = consensus["article_id"].astype(str)
+    consensus = consensus.rename(columns={"consensus_label": "label", "agreement": "sample_weight"})
+    return consensus
+
+
 def _stratified_split(df: pd.DataFrame, seed: int, train_size: float, valid_size: float):
     train_df, tmp_df = train_test_split(
         df,
@@ -79,9 +106,7 @@ def build_pseudo_stage(args, merged: pd.DataFrame, babe_ids: set[str], output_di
 
 
 def build_finetune_stage(args, merged: pd.DataFrame, output_dir: Path):
-    consensus = pd.read_csv(args.consensus_csv)
-    consensus["article_id"] = consensus["article_id"].astype(str)
-    consensus = consensus.rename(columns={"consensus_label": "label", "agreement": "sample_weight"})
+    consensus = _load_consensus_labels(args.consensus_csv)
 
     merged_small = merged[["article_id", "body"]].copy()
     merged_small["article_id"] = merged_small["article_id"].astype(str)
@@ -95,6 +120,10 @@ def build_finetune_stage(args, merged: pd.DataFrame, output_dir: Path):
     train_df.to_csv(output_dir / "finetune_train.csv", index=False)
     valid_df.to_csv(output_dir / "finetune_valid.csv", index=False)
     test_df.to_csv(output_dir / "finetune_test.csv", index=False)
+    print(
+        "[prepare_data] Fine-tune labels source: "
+        f"{args.consensus_csv} (merged_clean_data labels ignored)"
+    )
     print(f"[prepare_data] Fine-tune stage rows: train={len(train_df)}, valid={len(valid_df)}, test={len(test_df)}")
 
 
@@ -114,8 +143,7 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    merged = pd.read_csv(args.merged_csv)
-    merged["article_id"] = merged["article_id"].astype(str)
+    merged = _load_merged_bodies(args.merged_csv)
     babe_ids = _read_babe_ids(args.babe_csv)
 
     build_pseudo_stage(args, merged, babe_ids, output_dir)
