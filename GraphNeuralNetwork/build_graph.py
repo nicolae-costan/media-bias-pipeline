@@ -1,7 +1,6 @@
 
 import os
 import argparse
-from typing import Dict
 
 import numpy as np
 import pandas as pd
@@ -218,7 +217,7 @@ def build_label_tensors(
     return y, train_mask, val_mask, test_mask, low_conf_mask, weights
 
 
-def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_labels:dict[str,int],top_k:int,sim_threshold:float,chunk_size = 1000,same_label_bonus=0.05, diff_label_penalty=0.10):
+def build_edges(article_ids, embeddings: np.ndarray, emotions: np.ndarray, top_k: int, sim_threshold: float, chunk_size=1000):
     """
         Builds a bidirectional k-Nearest Neighbors (k-NN) graph based on cosine similarity.
 
@@ -227,6 +226,9 @@ def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_la
         nearest neighbors, provided the similarity exceeds the `sim_threshold`. The returned
         graph is undirected (edges are bidirectional) and deduplicated, formatted specifically
         for PyTorch Geometric.
+
+        Important: edge construction is label-agnostic. Labels and train/val/test masks are
+        created after the graph topology and must not influence neighbor selection.
 
         Args:
             embeddings (np.ndarray): A 2D numpy array containing the vectors (shape: [num_nodes, embedding_dim]).
@@ -250,10 +252,6 @@ def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_la
     normed_emb = normalize(embeddings, norm='l2')
     normed_emo = normalize(emotions, norm='l2')
 
-    # Build label lookup: article_id -> label (or -1 if unknown)
-    id_to_label = {aid: known_labels.get(aid, -1) for aid in article_ids}
-    label_arr = np.array([id_to_label[aid] for aid in article_ids], dtype=np.int32)
-
     N = len(normed_emb)
     rows_list = []
     cols_list = []
@@ -269,20 +267,10 @@ def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_la
         sim_emo = cosine_similarity(normed_emo[chunk_start:chunk_end], normed_emo)
         sims = ALPHA * sim_emb + BETA * sim_emo  # [chunk, N]
 
-        chunk_labels = label_arr[chunk_start:chunk_end]
-
         for local_i, row_sims in enumerate(sims):
             global_i = chunk_start + local_i
-            label_i  = chunk_labels[local_i]
             row_sims = row_sims.copy()
             row_sims[global_i] = -1.0  # exclude self-loops
-
-            # Apply label-aware adjustment only when both nodes are labeled
-            if label_i != -1:
-                same_mask = (label_arr == label_i)
-                diff_mask = (label_arr != label_i) & (label_arr != -1)
-                row_sims[same_mask] += same_label_bonus
-                row_sims[diff_mask] -= diff_label_penalty
 
             top_indices = np.argsort(row_sims)[::-1][:top_k]
             for j in top_indices:
@@ -314,15 +302,6 @@ def build_edges(article_ids,embeddings: np.ndarray,emotions:np.ndarray ,known_la
     print(f"[build_graph] Total edges (bidirectional): {edge_index.shape[1]:,}")
     return edge_index, edge_attr
 
-def get_article_mapping(args)->Dict[str, int]:
-    babe_df = pd.read_csv(os.getenv("BABE_CSV"),sep=";",on_bad_lines='skip')
-    label_map = {"Biased": 1, "Non-biased": 0}
-    known_labels = {
-        str(row[args.babe_id_col]): label_map.get(row[args.babe_label_col], -1)
-        for _, row in babe_df.iterrows()
-    }
-    return known_labels
-
 def main():
     args =  get_args()
 
@@ -337,15 +316,10 @@ def main():
     # i think we should use only the embeddings not the emotions
     article_ids,embeddings,emotions = load_embeddings(conn_params)
 
-    known_labels = get_article_mapping(args)
-    #node_features = np.concatenate([embeddings,emotions],axis = 1)
-
-    x = torch.tensor(embeddings, dtype=torch.float)
     edge_index, edge_attr = build_edges(
         article_ids,
         embeddings,
         emotions,
-        known_labels,
         top_k=args.top_k,
         sim_threshold=args.sim_threshold,
         chunk_size=args.chunk_size,

@@ -1,3 +1,4 @@
+import argparse
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -117,6 +118,22 @@ class GraphBiasLabels(pl.LightningModule):
             )
         return self.classifier(self.bottleneck(h))
 
+    @staticmethod
+    def _split_edge_index(edge_index: torch.Tensor, node_mask: torch.Tensor) -> torch.Tensor:
+        """Keep only edges whose source and destination are both inside node_mask."""
+        if edge_index.numel() == 0:
+            return edge_index
+
+        node_mask = node_mask.to(device=edge_index.device, dtype=torch.bool)
+        src, dst = edge_index
+        keep = node_mask[src] & node_mask[dst]
+        return edge_index[:, keep]
+
+    def _edge_index_for_mask(self, data, mask):
+        if getattr(self.hparams, "strict_split_edges", True):
+            return self._split_edge_index(data.edge_index, mask)
+        return data.edge_index
+
     # -------------------------------------------------------------------------
     # Loss
     # -------------------------------------------------------------------------
@@ -171,7 +188,15 @@ class GraphBiasLabels(pl.LightningModule):
             min_lr=hp.min_lr,
             verbose=True,
         )
-        return optimizer, scheduler
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "val_f1_macro",
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
 
     def build_model(self):
         import os
@@ -192,7 +217,8 @@ class GraphBiasLabels(pl.LightningModule):
 
     def training_step(self, batch, batch_idx=0):
         data = batch
-        logits = self(data.x, data.emotions, data.edge_index)
+        edge_index = self._edge_index_for_mask(data, data.train_mask)
+        logits = self(data.x, data.emotions, edge_index)
         loss = self.loss(logits, data.y, data.label_weights, data.train_mask)
         
         output = {"loss": loss}
@@ -200,10 +226,11 @@ class GraphBiasLabels(pl.LightningModule):
         return output
 
     @torch.no_grad()
-    def _evaluate(self, data, mask):
+    def _evaluate(self, data, mask, use_split_edges: bool = True):
         """Shared evaluation logic for val and test masks."""
         self.eval()
-        logits = self(data.x, data.emotions, data.edge_index)
+        edge_index = self._split_edge_index(data.edge_index, mask) if use_split_edges else data.edge_index
+        logits = self(data.x, data.emotions, edge_index)
         preds = logits.argmax(dim=-1)
         step_loss = self.loss(logits, data.y, data.label_weights, mask)
 
@@ -354,5 +381,11 @@ class GraphBiasLabels(pl.LightningModule):
         # Data
         parser.add_argument("--graph_path", type=str, default="graph.pt",
                             help="Path to the .pt file produced by build_graph.py")
+        parser.add_argument(
+            "--strict_split_edges",
+            action=argparse.BooleanOptionalAction,
+            default=True,
+            help="Use only within-split edges for train/val/test to avoid transductive leakage.",
+        )
 
         return parser
