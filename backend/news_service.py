@@ -11,6 +11,30 @@ from backend.schemas import NewsArticle, NewsSearchRequest, NewsSearchResponse
 
 TRUNCATION_RE = re.compile(r"\s*\[\+\d+\s+chars\]\s*$")
 WHITESPACE_RE = re.compile(r"\s+")
+SPACED_LICENSING_EMAIL_DOT_RE = re.compile(
+    r"((?i:licensing)\s*@\s*[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)\s*\.\s*([a-z]{2,24})"
+)
+LICENSING_SENTENCE_RE = re.compile(
+    r"(?is)(?:^|(?<=[.!?])\s+)[^.!?\n]*(?:contact|email)\s+licensing\s*@"
+    r"\s*[^\s.!?]+(?:\.[^\s.!?]+)*[^.!?\n]*(?:[.!?]|$)"
+)
+BOILERPLATE_SENTENCE_RE = re.compile(
+    r"(?is)(?:^|(?<=[.!?])\s+)[^.!?\n]*(?:"
+    r"for any questions about our guidelines or partnering with us|"
+    r"please use the sharing tools|"
+    r"copying articles?\s+to share with others|"
+    r"subscribers may share up to|"
+    r"more information can be found at\s+https?://(?:www\.)?ft\.com/tour"
+    r")[^.!?\n]*(?:[.!?]|$)"
+)
+BOILERPLATE_LINE_PATTERNS = (
+    re.compile(r"\blicensing\s*@\s*", re.IGNORECASE),
+    re.compile(r"\bfor any questions about our guidelines or partnering with us\b", re.IGNORECASE),
+    re.compile(r"\bplease use the sharing tools\b", re.IGNORECASE),
+    re.compile(r"\bcopying articles?\s+to share with others\b", re.IGNORECASE),
+    re.compile(r"\bsubscribers may share up to\b", re.IGNORECASE),
+    re.compile(r"\bmore information can be found at\s+https?://(?:www\.)?ft\.com/tour\b", re.IGNORECASE),
+)
 
 
 class ArticleTextExtractor(HTMLParser):
@@ -137,7 +161,7 @@ class NewsService:
             return None
 
         text = clean_article_content(extractor.text())
-        if len(text) < 500:
+        if not text or len(text) < 500:
             return None
         if self.settings.news_article_max_chars > 0:
             return text[: self.settings.news_article_max_chars]
@@ -176,5 +200,23 @@ def clean_article_content(content: str | None) -> str | None:
     if not content:
         return None
     content = TRUNCATION_RE.sub("", content)
+    content = remove_news_boilerplate(content)
     content = WHITESPACE_RE.sub(" ", content).strip()
     return content or None
+
+
+def remove_news_boilerplate(content: str) -> str:
+    content = SPACED_LICENSING_EMAIL_DOT_RE.sub(r"\1.\2", content)
+    content = LICENSING_SENTENCE_RE.sub(" ", content)
+    content = BOILERPLATE_SENTENCE_RE.sub(" ", content)
+
+    cleaned_lines = []
+    for line in content.splitlines():
+        clean_line = WHITESPACE_RE.sub(" ", line).strip()
+        if clean_line and not is_boilerplate_line(clean_line):
+            cleaned_lines.append(clean_line)
+    return "\n".join(cleaned_lines)
+
+
+def is_boilerplate_line(line: str) -> bool:
+    return any(pattern.search(line) for pattern in BOILERPLATE_LINE_PATTERNS)

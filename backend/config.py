@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     news_api_key: str | None = None
     news_api_base_url: str = "https://newsapi.org/v2"
     news_api_timeout_seconds: float = 10.0
-    news_fetch_full_content: bool = True
+    news_fetch_full_content: bool = False
     news_article_timeout_seconds: float = 8.0
     news_article_max_chars: int = 0
     news_article_user_agent: str = (
